@@ -43,8 +43,32 @@ def slugify(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", norm_text(s)).strip("-") or "equipo"
 
 
+def normalize_manual_pos(raw: str) -> str:
+    s = norm_text(raw)
+    if not s:
+        return ""
+    if s in ("p", "pitcher", "lanzador", "1"): return "P"
+    if s in ("c", "catcher", "receptor", "2"): return "C"
+    if s in ("1b", "1ra", "primera", "primera base", "3"): return "1B"
+    if s in ("2b", "2da", "segunda", "segunda base", "4"): return "2B"
+    if s in ("3b", "3ra", "tercera", "tercera base", "5"): return "3B"
+    if s in ("ss", "short", "shortstop", "short stop", "campo corto", "campocorto", "6"): return "SS"
+    if s in ("lf", "left", "left field", "jardin izquierdo", "izquierdo", "7"): return "LF"
+    if s in ("cf", "center", "center field", "jardin central", "central", "8"): return "CF"
+    if s in ("rf", "right", "right field", "jardin derecho", "derecho", "9"): return "RF"
+    if s in ("sf", "short field", "shortfield", "4to", "4to field", "cuarto", "10", "11"): return "SF"
+    if s in ("bd", "dh", "ep", "designado", "bateador designado", "extra"): return "BD"
+    return raw.strip().upper()
+
+
 def load_manual_positions(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Busca `posiciones_relampago.csv` en la raíz (y fallback a `data/posiciones_manuales.csv`)."""
+    """
+    Lee `posiciones_relampago.csv` tolerando:
+      - Codificación UTF-8, UTF-8-BOM o Windows-1252/Latin-1 (Excel en español con ñ y acentos)
+      - Separador por coma (,) o punto y coma (;) típico de Excel en español
+    """
+    import io
+
     candidates = [
         Path(cfg.get("manual_positions_csv", "posiciones_relampago.csv")),
         Path("posiciones_relampago.csv"),
@@ -55,25 +79,52 @@ def load_manual_positions(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     for csv_path in candidates:
         if not csv_path.exists():
             continue
-        with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-            for r in csv.DictReader(f):
-                name = (r.get("jugador") or r.get("name") or "").strip()
-                if not name:
-                    continue
-                k = norm_text(name)
-                if k in out:
-                    continue
-                out[k] = {
-                    "name": name,
-                    "squad": (r.get("equipo") or "").strip(),
-                    "pos1": (r.get("pos_primaria") or "").strip().upper(),
-                    "pos2": (r.get("pos_secundaria") or "").strip().upper(),
-                    "pos3": (r.get("pos_terciaria") or "").strip().upper(),
-                    "is_pitcher": norm_text(r.get("es_pitcher") or "") in ("si", "yes", "1", "true", "x"),
-                    "pitcher_role": (r.get("rol_pitcher") or "").strip(),
-                }
+        raw_bytes = csv_path.read_bytes()
+        text = None
+        used_enc = ""
+        for enc in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                text = raw_bytes.decode(enc)
+                used_enc = enc
+                break
+            except UnicodeDecodeError:
+                continue
+        if text is None:
+            text = raw_bytes.decode("latin-1", errors="replace")
+            used_enc = "latin-1-fallback"
+
+        # Detectar delimitador (Excel en español suele guardar con ';')
+        first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
+        delimiter = ";" if first_line.count(";") > first_line.count(",") else ","
+        if first_line.count("\t") > max(first_line.count(","), first_line.count(";")):
+            delimiter = "\t"
+
+        reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+        for raw_row in reader:
+            # Normalizar nombres de columnas (sin espacios ni acentos)
+            r = {norm_text(k): (v or "").strip() for k, v in raw_row.items() if k is not None}
+            name = (r.get("jugador") or r.get("name") or r.get("nombre") or "").strip()
+            if not name:
+                continue
+            k = norm_text(name)
+            if k in out:
+                continue
+            pos1 = normalize_manual_pos(r.get("pos_primaria") or r.get("posicion_primaria") or r.get("pos1") or r.get("posicion") or "")
+            pos2 = normalize_manual_pos(r.get("pos_secundaria") or r.get("posicion_secundaria") or r.get("pos2") or "")
+            pos3 = normalize_manual_pos(r.get("pos_terciaria") or r.get("posicion_terciaria") or r.get("pos3") or "")
+            is_p_raw = norm_text(r.get("es_pitcher") or r.get("pitcher") or "")
+            is_pitcher = is_p_raw in ("si", "yes", "1", "true", "x") or pos1 == "P" or pos2 == "P"
+            out[k] = {
+                "name": name,
+                "squad": r.get("equipo") or "",
+                "pos1": pos1,
+                "pos2": pos2,
+                "pos3": pos3,
+                "is_pitcher": is_pitcher,
+                "pitcher_role": r.get("rol_pitcher") or r.get("rol") or "",
+            }
         if out:
-            print(f"[INFO] Posiciones fijas cargadas desde '{csv_path}' ({len(out)} jugadores).")
+            print(f"[INFO] Posiciones fijas cargadas desde '{csv_path}' ({len(out)} jugadores, enc={used_enc}, sep='{delimiter}').")
             break
     return out
 
