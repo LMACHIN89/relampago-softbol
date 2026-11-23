@@ -50,6 +50,8 @@ DEFAULT_PLAYER_ALIASES: Dict[str, str] = {
     "pedro brancaccio": "Pedro Brancaccio",
     "andres vahamonde": "Andres Vaamonde",
     "andres vaamonde": "Andres Vaamonde",
+    "guillermo roman": "Guillermo Tovar",
+    "guillermo tovar": "Guillermo Tovar",
 }
 
 
@@ -89,6 +91,42 @@ def normalize_manual_pos(raw: str) -> str:
     if s in ("sfi", "short field interno", "shortfield interno", "sf interno", "interno", "sf", "short field", "shortfield", "10"): return "SFI"
     if s in ("bd", "dh", "ep", "designado", "bateador designado", "extra"): return "BD"
     return raw.strip().upper()
+
+
+def parse_squad_set(raw: str) -> List[str]:
+    """
+    Interpreta la columna 'equipo' del CSV sin falsos positivos (ej. 'Relampago B' -> ['B'],
+    NO ['A','B'] por la 'a' de 'Relampago').
+    Soporta: 'A', 'B', 'A y B', 'A+B', 'A/B', 'A,B', 'AB', 'Ambos', 'Todos', 'Equipo A', 'Relampago B'.
+    """
+    s = norm_text(raw)
+    if not s:
+        return []
+    if any(w in s for w in ("ambos", "todos", "a+b", "a/b", "a,b", "a y b", "a-b", "a & b")):
+        return ["A", "B"]
+    # Quitar palabras de relleno que contienen letras 'a' o 'b'
+    cleaned = re.sub(r"\b(relampago|del|caribe|equipo|team|softbol|club)\b", " ", s)
+    cleaned = re.sub(r"[^a-z0-9]+", " ", cleaned).strip()
+    tokens = set(cleaned.split())
+    if "ab" in tokens or "ba" in tokens or ("a" in tokens and "b" in tokens):
+        return ["A", "B"]
+    res = []
+    if "a" in tokens:
+        res.append("A")
+    if "b" in tokens:
+        res.append("B")
+    return res
+
+
+def format_squad_label(squads: List[str]) -> str:
+    s = set(squads)
+    if "A" in s and "B" in s:
+        return "A y B"
+    if "A" in s:
+        return "A"
+    if "B" in s:
+        return "B"
+    return ""
 
 
 def load_manual_positions(cfg: Dict[str, Any], alias_map: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
@@ -144,9 +182,11 @@ def load_manual_positions(cfg: Dict[str, Any], alias_map: Dict[str, str]) -> Dic
             pos3 = normalize_manual_pos(r.get("pos_terciaria") or r.get("posicion_terciaria") or r.get("pos3") or "")
             is_p_raw = norm_text(r.get("es_pitcher") or r.get("pitcher") or "")
             is_pitcher = is_p_raw in ("si", "yes", "1", "true", "x") or pos1 == "P" or pos2 == "P"
+            sq_list = parse_squad_set(r.get("equipo") or "")
             out[k] = {
                 "name": name,
-                "squad": r.get("equipo") or "",
+                "squad": format_squad_label(sq_list),
+                "squads": sq_list,
                 "pos1": pos1,
                 "pos2": pos2,
                 "pos3": pos3,
@@ -355,16 +395,22 @@ def build_view_for_tournaments(
 
     # Incluir también jugadores definidos en `posiciones_relampago.csv` si coinciden con el equipo (A/B)
     for mk, mv in manual_pos.items():
-        sq_str = norm_text(mv.get("squad", ""))
-        matches_sq = (squad_tag == "ALL") or (not sq_str) or (norm_text(squad_tag) in sq_str)
+        sq_list = mv.get("squads") or []
+        matches_sq = (squad_tag == "ALL") or (not sq_list) or (squad_tag in sq_list)
         if matches_sq and mk not in our_display_names:
             our_display_names[mk] = mv["name"]
 
-    # Construir roster consolidado de Relámpago
+    # Construir roster consolidado de Relámpago respetando la columna `equipo` del CSV
     all_our_keys = set(our_display_names.keys()) | set(our_bat_by_p.keys()) | set(our_pic_by_p.keys()) | set(our_def_by_p.keys())
     relampago_roster: List[Dict[str, Any]] = []
 
     for pk in sorted(all_our_keys):
+        mp = manual_pos.get(pk, {})
+        csv_squads = mp.get("squads") or []
+        # Si la plantilla CSV asignó explícitamente este jugador a otro equipo (ej. solo 'B'),
+        # respetarlo al filtrar por Equipo A o Equipo B:
+        if squad_tag in ("A", "B") and csv_squads and (squad_tag not in csv_squads):
+            continue
         disp_name = our_display_names.get(pk, pk.title())
         bat = aggregate_batting(our_bat_by_p.get(pk, []))
 
@@ -393,7 +439,6 @@ def build_view_for_tournaments(
         else:
             dfn = dfn_from_pos
 
-        mp = manual_pos.get(pk, {})
         fixed_pos1 = mp.get("pos1", "")
         fixed_pos2 = mp.get("pos2", "")
         fixed_pos3 = mp.get("pos3", "")
@@ -405,9 +450,12 @@ def build_view_for_tournaments(
         primary_pos = fixed_pos1 or (real_pos_list[0]["pos"] if real_pos_list else ("P" if is_pitcher else "UTIL"))
         secondary_pos = fixed_pos2 or (real_pos_list[1]["pos"] if len(real_pos_list) > 1 else "")
 
+        eff_squads = csv_squads if csv_squads else (["A", "B"] if pk in dual_squad_players else ([squad_tag] if squad_tag in ("A", "B") else []))
+        is_dual = ("A" in eff_squads and "B" in eff_squads) or (not csv_squads and pk in dual_squad_players)
         relampago_roster.append({
             "name": disp_name,
-            "dual_squad": pk in dual_squad_players,
+            "assigned_squad": format_squad_label(eff_squads),
+            "dual_squad": is_dual,
             "batting": bat,
             "pitching": pic,
             "defense": dfn,
@@ -675,9 +723,10 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
           const f2 = (ov.pos2 !== undefined) ? ov.pos2 : (p.fixed_pos2 || "");
           const isP = (ov.is_pitcher !== undefined) ? ov.is_pitcher : (p.is_pitcher || f1 === "P" || f2 === "P");
           const pRole = (ov.pitcher_role !== undefined) ? ov.pitcher_role : (p.pitcher_role || "");
+          const eqVal = (ov.equipo !== undefined) ? ov.equipo : (p.assigned_squad || "");
           const prim = f1 || p.primary_pos || (isP ? "P" : "UTIL");
           const sec = f2 || p.secondary_pos || "";
-          return {{ ...p, fixed_pos1: f1, fixed_pos2: f2, primary_pos: prim, secondary_pos: sec, is_pitcher: isP, pitcher_role: pRole }};
+          return {{ ...p, assigned_squad: eqVal, dual_squad: eqVal === "A y B" || p.dual_squad, fixed_pos1: f1, fixed_pos2: f2, primary_pos: prim, secondary_pos: sec, is_pitcher: isP, pitcher_role: pRole }};
         }});
       }}
 
@@ -832,7 +881,7 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
       function downloadPositionsCSV(roster, squadLabel) {{
         const header = "jugador,equipo,pos_primaria,pos_secundaria,pos_terciaria,es_pitcher,rol_pitcher";
         const lines = roster.map(p => {{
-          const eq = p.dual_squad ? "A y B" : (squadLabel === "ALL" ? "A y B" : squadLabel);
+          const eq = p.assigned_squad || (p.dual_squad ? "A y B" : (squadLabel === "ALL" ? "A y B" : squadLabel));
           const p1 = p.fixed_pos1 || (p.primary_pos !== "UTIL" ? p.primary_pos : "");
           const p2 = p.fixed_pos2 || p.secondary_pos || "";
           const p3 = p.fixed_pos3 || "";
@@ -998,11 +1047,12 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
                   <button class="btn btn-green" id="btn-dl-csv">💾 Descargar posiciones_relampago.csv</button>
                 </div>
                 <div class="tw"><table>
-                  <thead><tr><th>Jugador</th><th>Posición Fija #1</th><th>Posición #2</th><th>¿Es Pitcher?</th><th>Rol de Pitcheo</th></tr></thead>
+                  <thead><tr><th>Jugador</th><th>Equipo</th><th>Posición Fija #1</th><th>Posición #2</th><th>¿Es Pitcher?</th><th>Rol de Pitcheo</th></tr></thead>
                   <tbody>
                     ${{roster.map(p => `
                       <tr>
                         <td><strong>${{esc(p.name)}}</strong></td>
+                        <td><select class="ed-sel" data-ed-eq="${{esc(p.name)}}"><option value="" ${{!p.assigned_squad?"selected":""}}>Auto</option><option value="A" ${{p.assigned_squad==="A"?"selected":""}}>A</option><option value="B" ${{p.assigned_squad==="B"?"selected":""}}>B</option><option value="A y B" ${{p.assigned_squad==="A y B"?"selected":""}}>A y B</option></select></td>
                         <td><select class="ed-sel" data-ed-p1="${{esc(p.name)}}">${{ALL_POS.map(pos => `<option value="${{pos}}" ${{p.fixed_pos1 === pos ? "selected" : ""}}>${{pos || "Auto (" + p.primary_pos + ")"}}</option>`).join("")}}</select></td>
                         <td><select class="ed-sel" data-ed-p2="${{esc(p.name)}}">${{ALL_POS.map(pos => `<option value="${{pos}}" ${{p.fixed_pos2 === pos ? "selected" : ""}}>${{pos || "—"}}</option>`).join("")}}</select></td>
                         <td><input type="checkbox" data-ed-pic="${{esc(p.name)}}" ${{p.is_pitcher ? "checked" : ""}} /> Sí</td>
@@ -1177,6 +1227,9 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
         // Position Editor Listeners
         if (showPosEditor) {{
           const ensureOv = (nm) => {{ if (!localPosOverrides[nm]) localPosOverrides[nm] = {{}}; return localPosOverrides[nm]; }};
+          document.querySelectorAll("[data-ed-eq]").forEach(s => s.addEventListener("change", (e) => {{
+            ensureOv(e.target.dataset.edEq).equipo = e.target.value; saveLocalOverrides(); render();
+          }}));
           document.querySelectorAll("[data-ed-p1]").forEach(s => s.addEventListener("change", (e) => {{
             ensureOv(e.target.dataset.edP1).pos1 = e.target.value; saveLocalOverrides(); render();
           }}));
@@ -1448,6 +1501,12 @@ def main() -> None:
                         ck, _ = canonical_player_key_and_name(p["name"], alias_map)
                         if ck:
                             (players_in_a if sq == "A" else players_in_b).add(ck)
+    for mk, mv in manual_pos.items():
+        sqs = mv.get("squads") or []
+        if "A" in sqs:
+            players_in_a.add(mk)
+        if "B" in sqs:
+            players_in_b.add(mk)
     dual_squad_players = players_in_a & players_in_b
 
     views: Dict[str, Dict[str, Any]] = {}
