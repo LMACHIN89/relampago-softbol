@@ -1,0 +1,28 @@
+jugador,equipo,pos_primaria,pos_secundaria,pos_terciaria,es_pitcher,rol_pitcher
+Freddy Cedeño,A y B,,,,SI,Abridor, relevista y cerrador 
+Leonardo Machin,A y B,2B,SS,,NO,
+Guillermo Roman,A,3B,,,NO,
+Oscar Carrillo,A,SS,2B,,NO,
+Luis Loretto,B,C,,,NO,
+Cesar Delgado,A y B,,,,SI,Abridor, relevista y cerrador 
+Jose Sebastiano,A y B,1B,,,NO,
+Radames Larez,A y B,LF,RF,SFE,NO,
+Jose García,A y B,2B,SFI,,NO,
+Pedro Brancaccio,A y B,1B,,,NO,
+Gabriel Marcano,B,RF,SFE,,NO,
+Jose Cabral,B,2B,SFI,,NO,
+Jaime Valls,B,RF,SFE,CF,NO,
+Anibal Monsalve,B,CF,SFE,LF,NO,
+Carlos Gonzalez,A,CF,C,3B,NO,
+Keiser Flores,A y B,SFI,3B,SS,NO,
+Calogero Palmeri,A y B,RF,SFE,LF,NO,
+Juan Tovar,A y B,1B,,,NO,
+Ronald Muñoz,A y B,,,,SI,Abridor, relevista y cerrador 
+Roinner Herrera,A y B,SFI,SFE,RF,NO,
+Leopoldo Azpurua,A,LF,3B,CF,NO,
+Andres Vahamonde,A ,1B,,,NO,
+Ramses Bastardo,A,C,,,NO,
+Anthony Perez,A y B,SFE,RF,CF,NO,
+Mario Verochi,A,SS,2B,3B,NO,
+Carlos Martinez,A y B,2B,SS,,NO,
+Cesar Carvajal,A,CF,SFE,LF,NO,

@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 """
-Extractor automático — Liga de Softbol VENEZUELA-UNIMET (beisbolysoftbol.com)
-=============================================================================
-Sin dependencias externas y SIN necesidad de contraseñas (página pública).
-
-Extrae automáticamente para todos los torneos donde participa Relámpago (>= Torneo 87):
-  1. Tablas de posiciones (Eliminatoria, Semifinal, Final)
-  2. Todos los resultados de juegos (Visitante vs Local y marcadores)
-  3. Estadísticas completas de TODOS los equipos: Ofensiva, Pitcheo y Defensiva
-  4. Fichas individuales de los jugadores de Relámpago (posiciones defensivas reales
-     AL CAMPO + historial juego a juego)
-
-Guarda todo en `data/softbol_snapshot.json`.
+Extractor automático v2 — Liga de Softbol VENEZUELA-UNIMET (beisbolysoftbol.com)
+================================================================================
+Mejoras v2:
+  - Parser HTML con pila de tablas (soporta tablas anidadas sin perder Pitcheo ni Defensiva).
+  - Detecta todos los alias de columnas en español de Pitcheo y Defensiva (IL/EL/IP, JG/JP/JS,
+    PO/AS/E/DP/EJ/PDF/AL CAMPO) y lee `roster.php` para capturar rosters completos (incluso en T90).
+  - Extrae también estadísticas de pitcheo y defensa desde `jugador.php` como respaldo automático.
+  - Imprime diagnóstico claro en GitHub Actions si alguna tabla viene vacía.
 """
 
 import html
@@ -50,7 +46,6 @@ def clean_cell(s: str) -> str:
 
 def fetch_html(url: str, retries: int = 2) -> str:
     full_url = url if url.startswith("http") else urllib.parse.urljoin(BASE_SITE, url.lstrip("/"))
-    # Codificar espacios en querystring si los hay
     parsed = urllib.parse.urlsplit(full_url)
     safe_url = urllib.parse.urlunsplit((
         parsed.scheme, parsed.netloc,
@@ -76,23 +71,16 @@ def fetch_html(url: str, retries: int = 2) -> str:
     return ""
 
 
-class TableAndLinkParser(HTMLParser):
-    """Extrae todas las tablas HTML (con texto y enlaces de cada celda) + enlaces globales + encabezados."""
+class NestedTableAndLinkParser(HTMLParser):
+    """Extrae TODAS las tablas (incluso si están anidadas dentro de tablas de maquetación)."""
     def __init__(self) -> None:
         super().__init__()
         self.all_links: List[Tuple[str, str]] = []
         self.tables: List[Dict[str, Any]] = []
+        self._table_stack: List[Dict[str, Any]] = []
         self._in_a = False
         self._cur_href = ""
         self._cur_a_text: List[str] = []
-
-        self._table_depth = 0
-        self._cur_table: Optional[Dict[str, Any]] = None
-        self._in_tr = False
-        self._cur_row: List[Dict[str, Any]] = []
-        self._in_cell = False
-        self._cur_cell_text: List[str] = []
-        self._cur_cell_links: List[Tuple[str, str]] = []
         self._in_heading = False
         self._cur_heading: List[str] = []
         self._last_heading = ""
@@ -108,16 +96,19 @@ class TableAndLinkParser(HTMLParser):
             self._cur_href = str(attr_d.get("href") or "").strip()
             self._cur_a_text = []
         elif t == "table":
-            self._table_depth += 1
-            if self._table_depth == 1:
-                self._cur_table = {"heading": self._last_heading, "rows": []}
-        elif t == "tr" and self._table_depth == 1 and self._cur_table is not None:
-            self._in_tr = True
-            self._cur_row = []
-        elif t in ("td", "th") and self._in_tr:
-            self._in_cell = True
-            self._cur_cell_text = []
-            self._cur_cell_links = []
+            self._table_stack.append({
+                "heading": self._last_heading,
+                "rows": [],
+                "cur_row": None,
+                "cur_cell": None,
+            })
+        elif t == "tr" and self._table_stack:
+            self._table_stack[-1]["cur_row"] = []
+        elif t in ("td", "th") and self._table_stack:
+            top = self._table_stack[-1]
+            if top["cur_row"] is None:
+                top["cur_row"] = []
+            top["cur_cell"] = {"text_parts": [], "links": []}
 
     def handle_endtag(self, tag: str) -> None:
         t = tag.lower()
@@ -131,37 +122,44 @@ class TableAndLinkParser(HTMLParser):
             txt = clean_cell("".join(self._cur_a_text))
             if self._cur_href:
                 self.all_links.append((self._cur_href, txt))
-                if self._in_cell:
-                    self._cur_cell_links.append((self._cur_href, txt))
+                if self._table_stack and self._table_stack[-1]["cur_cell"] is not None:
+                    self._table_stack[-1]["cur_cell"]["links"].append((self._cur_href, txt))
             self._cur_href = ""
-        elif t in ("td", "th") and self._in_cell:
-            self._in_cell = False
-            self._cur_row.append({
-                "text": clean_cell("".join(self._cur_cell_text)),
-                "links": list(self._cur_cell_links),
-            })
-        elif t == "tr" and self._in_tr:
-            self._in_tr = False
-            if self._cur_row and self._cur_table is not None:
-                self._cur_table["rows"].append(self._cur_row)
-        elif t == "table":
-            if self._table_depth == 1 and self._cur_table is not None:
-                if self._cur_table["rows"]:
-                    self.tables.append(self._cur_table)
-                self._cur_table = None
-            self._table_depth = max(0, self._table_depth - 1)
+        elif t in ("td", "th") and self._table_stack:
+            top = self._table_stack[-1]
+            if top["cur_cell"] is not None and top["cur_row"] is not None:
+                top["cur_row"].append({
+                    "text": clean_cell("".join(top["cur_cell"]["text_parts"])),
+                    "links": list(top["cur_cell"]["links"]),
+                })
+                top["cur_cell"] = None
+        elif t == "tr" and self._table_stack:
+            top = self._table_stack[-1]
+            if top["cur_cell"] is not None and top["cur_row"] is not None:
+                top["cur_row"].append({
+                    "text": clean_cell("".join(top["cur_cell"]["text_parts"])),
+                    "links": list(top["cur_cell"]["links"]),
+                })
+                top["cur_cell"] = None
+            if top["cur_row"]:
+                top["rows"].append(top["cur_row"])
+            top["cur_row"] = None
+        elif t == "table" and self._table_stack:
+            finished = self._table_stack.pop()
+            if finished["rows"]:
+                self.tables.append({"heading": finished["heading"], "rows": finished["rows"]})
 
     def handle_data(self, data: str) -> None:
         if self._in_heading:
             self._cur_heading.append(data)
         if self._in_a:
             self._cur_a_text.append(data)
-        if self._in_cell:
-            self._cur_cell_text.append(data)
+        if self._table_stack and self._table_stack[-1]["cur_cell"] is not None:
+            self._table_stack[-1]["cur_cell"]["text_parts"].append(data)
 
 
-def parse_page(html_str: str) -> TableAndLinkParser:
-    p = TableAndLinkParser()
+def parse_page(html_str: str) -> NestedTableAndLinkParser:
+    p = NestedTableAndLinkParser()
     p.feed(html_str or "")
     return p
 
@@ -186,24 +184,18 @@ def to_float(val: Any) -> float:
 
 
 def parse_baseball_rate(val: Any, allow_above_one: bool = False) -> float:
-    """
-    Normaliza los formatos peculiares de beisbolysoftbol.com:
-      '.600' -> 0.600 | '.1000' -> 1.000 | '889' -> 0.889 | '1266' -> 1.266 | '---' -> 0.0
-    """
     s = str(val or "").strip().replace(",", ".")
     if not s or "---" in s or "nan" in s.lower():
         return 0.0
     if s in (".1000", "1000", "1.000"):
         return 1.0
     if s.startswith(".") and len(s) >= 5 and s[1:].isdigit():
-        # Ej. '.1000' -> 1.000, '.1266' -> 1.266, '.2000' -> 2.000
         return round(int(s[1:]) / 1000.0, 3)
     try:
         num = float(s)
     except ValueError:
         return 0.0
     if num > 5.0:
-        # Formato entero en milésimas (ej. 889 -> 0.889, 1266 -> 1.266)
         num = num / 1000.0
     if not allow_above_one and num > 1.0:
         num = min(1.0, num)
@@ -211,7 +203,6 @@ def parse_baseball_rate(val: Any, allow_above_one: bool = False) -> float:
 
 
 def parse_innings(val: Any) -> float:
-    """Convierte innings tipo '5.2' (5 y 2/3) a innings reales (5.667) para EFE/WHIP."""
     f = to_float(val)
     whole = int(f)
     frac = round((f - whole) * 10)
@@ -241,25 +232,26 @@ def normalize_position(raw: str) -> str:
         return "2B"
     if "3ra" in s or "tercera" in s or "3b" in s or "(5)" in s:
         return "3B"
-    if "campo corto" in s or "short stop" in s or "shortstop" in s or "ss" == s or "(6)" in s:
+    if "campo corto" in s or "short stop" in s or "shortstop" in s or s == "ss" or "(6)" in s:
         return "SS"
-    if "izquierd" in s or "left" in s or "lf" == s or "(7)" in s:
+    if "izquierd" in s or "left" in s or s == "lf" or "(7)" in s:
         return "LF"
-    if "central" in s or "center" in s or "cf" == s or "(8)" in s:
+    if "central" in s or "center" in s or s == "cf" or "(8)" in s:
         return "CF"
-    if "derech" in s or "right" in s or "rf" == s or "(9)" in s:
+    if "derech" in s or "right" in s or s == "rf" or "(9)" in s:
         return "RF"
-    if "short field" in s or "shortfield" in s or "sf" == s or "(10)" in s or "4to" in s or "cuarto" in s or "(11)" in s:
+    if "short field" in s or "shortfield" in s or s == "sf" or "(10)" in s or "4to" in s or "cuarto" in s or "(11)" in s:
         return "SF"
-    if "design" in s or "bd" == s or "dh" == s or "bateador" in s or "ep" == s:
+    if "design" in s or s in ("bd", "dh", "ep") or "bateador" in s:
         return "BD"
     return raw.strip()
 
 
-def find_header_row(rows: List[List[Dict[str, Any]]], required_any: Tuple[str, ...]) -> Tuple[int, List[str]]:
-    for idx, row in enumerate(rows[:4]):
+def find_header_row(rows: List[List[Dict[str, Any]]], required_tokens: Tuple[str, ...], min_hits: int = 1) -> Tuple[int, List[str]]:
+    for idx, row in enumerate(rows[:8]):
         cols = [norm_text(c["text"]) for c in row]
-        if any(any(req == col or req in col for col in cols) for req in required_any):
+        hits = sum(1 for tok in required_tokens if any(tok == col or (len(tok) >= 3 and tok in col) for col in cols))
+        if hits >= min_hits:
             return idx, cols
     return -1, []
 
@@ -268,9 +260,39 @@ def col_val(row: List[Dict[str, Any]], headers: List[str], *aliases: str) -> str
     for al in aliases:
         al_n = norm_text(al)
         for i, h in enumerate(headers):
-            if i < len(row) and (h == al_n or (len(al_n) >= 3 and al_n in h)):
+            if i < len(row) and h == al_n:
+                return row[i]["text"]
+    for al in aliases:
+        al_n = norm_text(al)
+        if len(al_n) < 3:
+            continue
+        for i, h in enumerate(headers):
+            if i < len(row) and al_n in h:
                 return row[i]["text"]
     return ""
+
+
+def extract_row_player(r: List[Dict[str, Any]]) -> Tuple[str, str]:
+    """Busca el nombre del jugador y su jug_id en las primeras 5 celdas."""
+    for c in r[:5]:
+        for href, ltxt in c["links"]:
+            if "jugador.php" in href.lower():
+                jid = extract_query_param(href, "jug")
+                nm = ltxt or c["text"]
+                if nm:
+                    return nm, jid
+    for c in r[:4]:
+        txt = c["text"]
+        if txt and not re.fullmatch(r"[\d.\-/#]+", txt) and len(txt) >= 3:
+            return txt, ""
+    return "", ""
+
+
+def is_junk_player_name(name: str) -> bool:
+    n = norm_text(name)
+    if not n or len(n) < 2:
+        return True
+    return any(w in n for w in ("total", "equipo", "promedio", "jugador", "lanzador", "al campo", "defensiva", "pitcheo", "ofensiva"))
 
 
 # ==============================================================================
@@ -278,7 +300,6 @@ def col_val(row: List[Dict[str, Any]], headers: List[str], *aliases: str) -> str
 # ==============================================================================
 
 def discover_tournaments(league_html: str, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Encuentra todos los campeonatos en liga.php y filtra los de Relámpago >= min_tournament_number."""
     p = parse_page(league_html)
     min_num = int(cfg.get("min_tournament_number", 87))
     squad_map = cfg.get("tournaments_squad_map", {})
@@ -296,37 +317,25 @@ def discover_tournaments(league_html: str, cfg: Dict[str, Any]) -> List[Dict[str
             if t_num and t_num < min_num:
                 continue
             squad = squad_map.get(str(t_num), default_sq)
-            cams[cid] = {
-                "cam_id": cid,
-                "number": t_num,
-                "name": name,
-                "squad": squad,
-                "url": href,
-            }
+            cams[cid] = {"cam_id": cid, "number": t_num, "name": name, "squad": squad, "url": href}
 
-    ordered = sorted(cams.values(), key=lambda x: (-x["number"], -int(x["cam_id"]) if x["cam_id"].isdigit() else 0))
-    return ordered
+    return sorted(cams.values(), key=lambda x: (-x["number"], -int(x["cam_id"]) if x["cam_id"].isdigit() else 0))
 
 
 def parse_campeonato_standings(cam_html: str) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
-    """Extrae todas las tablas de posiciones (Eliminatoria/Semifinal/Final) y mapa de equipos con equ_id."""
     p = parse_page(cam_html)
     standings_blocks: List[Dict[str, Any]] = []
     teams_found: Dict[str, Dict[str, Any]] = {}
 
     for tbl in p.tables:
         rows = tbl["rows"]
-        h_idx, headers = find_header_row(rows, ("pts", "ca", "cp", "avg"))
-        if h_idx < 0 or ("ca" not in headers and "pts" not in headers):
+        h_idx, headers = find_header_row(rows, ("pts", "ca", "cp", "avg"), min_hits=3)
+        if h_idx < 0:
             continue
 
-        # Buscar título de fase (ej. "Torneo 87 Lanz Lento - Eliminatoria" o en la fila anterior)
         phase_title = tbl.get("heading") or "Eliminatoria"
-        if h_idx > 0 and rows[0]:
-            first_txt = rows[0][0]["text"]
-            if len(first_txt) > 4:
-                phase_title = first_txt
-        # Detectar si el título viene en la primera celda del header
+        if h_idx > 0 and rows[0] and len(rows[0][0]["text"]) > 4:
+            phase_title = rows[0][0]["text"]
         for c in rows[h_idx]:
             if "torneo" in norm_text(c["text"]) or "equipos participantes" in norm_text(c["text"]):
                 phase_title = c["text"]
@@ -336,7 +345,6 @@ def parse_campeonato_standings(cam_html: str) -> Tuple[List[Dict[str, Any]], Dic
         for r in rows[h_idx + 1:]:
             if len(r) < 6:
                 continue
-            # Buscar celda con enlace a equipo.php o texto de nombre
             team_name = ""
             equ_id = ""
             for cell in r[:4]:
@@ -348,7 +356,6 @@ def parse_campeonato_standings(cam_html: str) -> Tuple[List[Dict[str, Any]], Dic
                 if team_name:
                     break
             if not team_name:
-                # Fallback: segunda celda
                 team_name = r[1]["text"] if len(r) > 1 else r[0]["text"]
             if not team_name or norm_text(team_name) in ("total", "totales", "equipo"):
                 continue
@@ -368,21 +375,15 @@ def parse_campeonato_standings(cam_html: str) -> Tuple[List[Dict[str, Any]], Dic
             pts = to_int(col_val(r, headers, "pts"))
 
             parsed_rows.append({
-                "pos": len(parsed_rows) + 1,
-                "equ_id": equ_id,
-                "team": team_name,
-                "j": j, "g": g, "p": pr, "e": e,
-                "ca": ca, "cp": cp, "df": df,
-                "avg": avg, "pts": pts,
+                "pos": len(parsed_rows) + 1, "equ_id": equ_id, "team": team_name,
+                "j": j, "g": g, "p": pr, "e": e, "ca": ca, "cp": cp, "df": df, "avg": avg, "pts": pts,
             })
-
             if equ_id and equ_id not in teams_found:
                 teams_found[equ_id] = {"equ_id": equ_id, "name": team_name}
 
         if parsed_rows:
             standings_blocks.append({"phase": phase_title, "rows": parsed_rows})
 
-    # También capturar cualquier equipo.php enlazado fuera de tablas
     for href, txt in p.all_links:
         if "equipo.php" in href.lower() and txt:
             eid = extract_query_param(href, "equ")
@@ -393,14 +394,12 @@ def parse_campeonato_standings(cam_html: str) -> Tuple[List[Dict[str, Any]], Dic
 
 
 def parse_all_results(res_html: str) -> List[Dict[str, Any]]:
-    """Extrae todos los resultados desde todosresultados.php."""
     p = parse_page(res_html)
     games: List[Dict[str, Any]] = []
     seen = set()
-
     for tbl in p.tables:
         rows = tbl["rows"]
-        h_idx, headers = find_header_row(rows, ("visitante", "local", "boxscore", "fecha"))
+        h_idx, _ = find_header_row(rows, ("visitante", "local", "boxscore", "fecha"), min_hits=2)
         if h_idx < 0:
             continue
         for r in rows[h_idx + 1:]:
@@ -408,71 +407,55 @@ def parse_all_results(res_html: str) -> List[Dict[str, Any]]:
                 continue
             nj = r[0]["text"]
             date_str = r[1]["text"] if len(r) > 1 else ""
-            # Unir las celdas de marcador entre fecha y boxscore
             mid_cells = [c["text"] for c in r[2:] if norm_text(c["text"]) not in ("ver", "boxscore", "")]
-            blob = " ".join(mid_cells)
-            # Buscar patrón "Equipo A (11) - (7) Equipo B"
-            m = re.search(r"(.+?)\s*\(\s*(\d+)\s*\)\s*[-–]\s*\(\s*(\d+)\s*\)\s*(.+)", blob)
+            m = re.search(r"(.+?)\s*\(\s*(\d+)\s*\)\s*[-–]\s*\(\s*(\d+)\s*\)\s*(.+)", " ".join(mid_cells))
             if not m:
                 continue
-            vis_name = clean_cell(m.group(1))
-            vis_score = int(m.group(2))
-            loc_score = int(m.group(3))
-            loc_name = clean_cell(m.group(4))
-
+            vis_name, vis_score = clean_cell(m.group(1)), int(m.group(2))
+            loc_score, loc_name = int(m.group(3)), clean_cell(m.group(4))
             jue_id = ""
             for c in r:
                 for href, _ in c["links"]:
                     if "detallejuego.php" in href.lower():
                         jue_id = extract_query_param(href, "jue")
                         break
-
             key = jue_id or f"{date_str}_{vis_name}_{loc_name}_{vis_score}_{loc_score}"
             if key in seen:
                 continue
             seen.add(key)
-
             games.append({
-                "jue_id": jue_id,
-                "nj": nj,
-                "date": date_str,
-                "visitor": vis_name,
-                "visitor_score": vis_score,
-                "local": loc_name,
-                "local_score": loc_score,
+                "jue_id": jue_id, "nj": nj, "date": date_str,
+                "visitor": vis_name, "visitor_score": vis_score, "local": loc_name, "local_score": loc_score,
             })
     return games
 
 
+def parse_team_roster(html_str: str) -> List[Dict[str, str]]:
+    """Extrae jugadores inscritos desde roster.php (útil para torneos recién iniciados como T90)."""
+    p = parse_page(html_str)
+    found: Dict[str, Dict[str, str]] = {}
+    for href, txt in p.all_links:
+        if "jugador.php" in href.lower() and txt and not is_junk_player_name(txt):
+            jid = extract_query_param(href, "jug")
+            k = norm_text(txt)
+            if k not in found:
+                found[k] = {"jug_id": jid, "name": txt}
+    return list(found.values())
+
+
 def parse_team_batting(html_str: str) -> List[Dict[str, Any]]:
-    """Extrae tabla de ofensiva desde estadisticasequipo.php?...&est=ofe."""
     p = parse_page(html_str)
     players: List[Dict[str, Any]] = []
     for tbl in p.tables:
         rows = tbl["rows"]
-        h_idx, headers = find_header_row(rows, ("vb", "avg", "slg", "ops", "pde"))
-        if h_idx < 0 or "vb" not in headers:
+        h_idx, headers = find_header_row(rows, ("vb", "avg", "slg", "ops", "pde", "ci", "h"), min_hits=3)
+        if h_idx < 0 or ("vb" not in headers and "ab" not in headers):
             continue
         for r in rows[h_idx + 1:]:
-            if len(r) < 6:
+            if len(r) < 5:
                 continue
-            name = ""
-            jug_id = ""
-            for c in r[:3]:
-                for href, ltxt in c["links"]:
-                    if "jugador.php" in href.lower():
-                        jug_id = extract_query_param(href, "jug")
-                        name = ltxt or c["text"]
-                        break
-                if name:
-                    break
-            if not name:
-                # Buscar primera celda no numérica
-                for c in r[:3]:
-                    if c["text"] and not re.fullmatch(r"[\d.\-]+", c["text"]):
-                        name = c["text"]
-                        break
-            if not name or any(k in norm_text(name) for k in ("total", "equipo", "promedio", "jugador")):
+            name, jug_id = extract_row_player(r)
+            if is_junk_player_name(name):
                 continue
 
             jj = to_int(col_val(r, headers, "jj", "j"))
@@ -490,14 +473,9 @@ def parse_team_batting(html_str: str) -> List[Dict[str, Any]]:
             gp = to_int(col_val(r, headers, "gp", "hbp"))
             al = to_int(col_val(r, headers, "al", "pa"))
 
-            # Recalcular tasas exactas (más confiables que formatos truncados)
             avg = round(h / vb, 3) if vb > 0 else parse_baseball_rate(col_val(r, headers, "avg", "ave"))
             denom_obp = al if al >= (vb + bb + gp + sf) and al > 0 else (vb + bb + gp + sf)
             obp = round((h + bb + gp) / denom_obp, 3) if denom_obp > 0 else parse_baseball_rate(col_val(r, headers, "pde", "obp"))
-            # Validar contra PDE publicado si hay SF no listado
-            pde_pub = parse_baseball_rate(col_val(r, headers, "pde", "obp"))
-            if pde_pub > 0 and obp == 0:
-                obp = pde_pub
             tb = h + h2 + 2 * h3 + 3 * hr
             slg = round(tb / vb, 3) if vb > 0 else parse_baseball_rate(col_val(r, headers, "slg"), allow_above_one=True)
             ops = round(obp + slg, 3)
@@ -514,53 +492,53 @@ def parse_team_batting(html_str: str) -> List[Dict[str, Any]]:
     return players
 
 
-def parse_team_pitching(html_str: str) -> List[Dict[str, Any]]:
-    """Extrae tabla de pitcheo desde estadisticasequipo.php?...&est=pic."""
+def parse_team_pitching(html_str: str, debug_tag: str = "") -> List[Dict[str, Any]]:
     p = parse_page(html_str)
     pitchers: List[Dict[str, Any]] = []
+    seen_headers = []
+
     for tbl in p.tables:
         rows = tbl["rows"]
-        h_idx, headers = find_header_row(rows, ("efe", "era", "il", "ip", "el", "cl"))
+        if rows:
+            seen_headers.append([norm_text(c["text"]) for c in rows[0][:14]])
+        h_idx, headers = find_header_row(
+            rows,
+            ("efe", "era", "efec", "il", "ip", "el", "inn", "in", "cl", "er", "jg", "jp", "js", "whip", "bb", "k"),
+            min_hits=3,
+        )
         if h_idx < 0:
             continue
+        # Evitar confundir con tabla de bateo (si tiene VB/SLG) o defensa (si tiene PO/AS)
+        if "vb" in headers or "slg" in headers or ("po" in headers and "as" in headers):
+            continue
+
         for r in rows[h_idx + 1:]:
             if len(r) < 5:
                 continue
-            name = ""
-            jug_id = ""
-            for c in r[:3]:
-                for href, ltxt in c["links"]:
-                    if "jugador.php" in href.lower():
-                        jug_id = extract_query_param(href, "jug")
-                        name = ltxt or c["text"]
-                        break
-                if name:
-                    break
-            if not name:
-                for c in r[:3]:
-                    if c["text"] and not re.fullmatch(r"[\d.\-]+", c["text"]):
-                        name = c["text"]
-                        break
-            if not name or any(k in norm_text(name) for k in ("total", "equipo", "promedio", "jugador", "lanzador")):
+            name, jug_id = extract_row_player(r)
+            if is_junk_player_name(name):
                 continue
 
-            jj = to_int(col_val(r, headers, "jj", "j"))
+            jj = to_int(col_val(r, headers, "jj", "j", "jl"))
             ji = to_int(col_val(r, headers, "ji", "gs"))
-            g = to_int(col_val(r, headers, "g", "jg", "w"))
-            pr = to_int(col_val(r, headers, "p", "jp", "l"))
-            s = to_int(col_val(r, headers, "s", "js", "sv"))
-            ip_raw = to_float(col_val(r, headers, "il", "ip", "el", "ej"))
+            g = to_int(col_val(r, headers, "jg", "g", "pg", "w"))
+            pr = to_int(col_val(r, headers, "jp", "p", "pp", "l"))
+            s = to_int(col_val(r, headers, "js", "s", "sv"))
+            ip_raw = to_float(col_val(r, headers, "il", "el", "ip", "inn", "in", "ej", "entradas"))
             ip_real = parse_innings(ip_raw)
-            h = to_int(col_val(r, headers, "h", "hc", "hp"))
-            ca = to_int(col_val(r, headers, "ca", "cp"))
+            h = to_int(col_val(r, headers, "h", "hc", "hp", "hits"))
+            ca = to_int(col_val(r, headers, "cp", "ca", "c", "r"))
             cl = to_int(col_val(r, headers, "cl", "er"))
-            bb = to_int(col_val(r, headers, "bb"))
-            k = to_int(col_val(r, headers, "k", "so"))
-            hr = to_int(col_val(r, headers, "hr"))
-            efe_pub = to_float(col_val(r, headers, "efe", "era"))
-            # En softbol (7 innings) EFE = CL * 7 / IP si no viene publicada
+            bb = to_int(col_val(r, headers, "bb", "bo"))
+            k = to_int(col_val(r, headers, "k", "so", "pn", "kp"))
+            hr = to_int(col_val(r, headers, "hr", "jr"))
+            efe_pub = to_float(col_val(r, headers, "efe", "era", "efec", "ef"))
             efe = round(efe_pub, 2) if efe_pub > 0 else (round(cl * 7.0 / ip_real, 2) if ip_real > 0 else 0.0)
-            whip = round((h + bb) / ip_real, 2) if ip_real > 0 else to_float(col_val(r, headers, "whip"))
+            whip_pub = to_float(col_val(r, headers, "whip"))
+            whip = round((h + bb) / ip_real, 2) if ip_real > 0 else whip_pub
+
+            if jj == 0 and ip_real == 0 and g == 0 and pr == 0 and h == 0:
+                continue
 
             pitchers.append({
                 "jug_id": jug_id, "name": name,
@@ -571,68 +549,76 @@ def parse_team_pitching(html_str: str) -> List[Dict[str, Any]]:
             })
         if pitchers:
             break
+
+    if not pitchers and debug_tag:
+        print(f"       [DEBUG {debug_tag} est=pic] 0 pitchers. Headers vistos: {seen_headers[:4]}")
     return pitchers
 
 
-def parse_team_defense(html_str: str) -> List[Dict[str, Any]]:
-    """Extrae tabla de defensiva general del equipo desde estadisticasequipo.php?...&est=def."""
+def parse_team_defense(html_str: str, debug_tag: str = "") -> List[Dict[str, Any]]:
     p = parse_page(html_str)
     fielders: List[Dict[str, Any]] = []
+    seen_headers = []
+
     for tbl in p.tables:
         rows = tbl["rows"]
-        h_idx, headers = find_header_row(rows, ("po", "as", "pdf", "lt", "ej"))
+        if rows:
+            seen_headers.append([norm_text(c["text"]) for c in rows[0][:14]])
+        h_idx, headers = find_header_row(
+            rows,
+            ("po", "as", "a", "e", "err", "dp", "ej", "lt", "tl", "pdf", "fld", "pb"),
+            min_hits=3,
+        )
         if h_idx < 0:
             continue
+        if "vb" in headers or "efe" in headers or "era" in headers:
+            continue
+
         for r in rows[h_idx + 1:]:
             if len(r) < 5:
                 continue
-            name = ""
-            jug_id = ""
-            for c in r[:3]:
-                for href, ltxt in c["links"]:
-                    if "jugador.php" in href.lower():
-                        jug_id = extract_query_param(href, "jug")
-                        name = ltxt or c["text"]
-                        break
-                if name:
-                    break
-            if not name:
-                for c in r[:3]:
-                    if c["text"] and not re.fullmatch(r"[\d.\-]+", c["text"]):
-                        name = c["text"]
-                        break
-            if not name or any(k in norm_text(name) for k in ("total", "equipo", "promedio", "jugador", "al campo")):
+            name, jug_id = extract_row_player(r)
+            if is_junk_player_name(name):
                 continue
 
             jj = to_int(col_val(r, headers, "jj", "j"))
-            po = to_int(col_val(r, headers, "po"))
+            po = to_int(col_val(r, headers, "po", "o"))
             asist = to_int(col_val(r, headers, "as", "a"))
             err = to_int(col_val(r, headers, "e", "err"))
             dp = to_int(col_val(r, headers, "dp"))
-            ej = to_float(col_val(r, headers, "ej", "il", "ip"))
+            ej = to_float(col_val(r, headers, "ej", "il", "ip", "inn", "in"))
             lt = po + asist + err
-            pdf = round((po + asist) / lt, 3) if lt > 0 else parse_baseball_rate(col_val(r, headers, "pdf", "fld"))
+            pdf = round((po + asist) / lt, 3) if lt > 0 else parse_baseball_rate(col_val(r, headers, "pdf", "fld", "avg"))
+            pos_col = normalize_position(col_val(r, headers, "pos", "posicion", "al campo"))
+
+            if jj == 0 and po == 0 and asist == 0 and err == 0 and ej == 0:
+                continue
 
             fielders.append({
-                "jug_id": jug_id, "name": name,
+                "jug_id": jug_id, "name": name, "pos": pos_col,
                 "jj": jj, "po": po, "as": asist, "e": err, "dp": dp, "ej": ej, "pdf": pdf,
             })
         if fielders:
             break
+
+    if not fielders and debug_tag:
+        print(f"       [DEBUG {debug_tag} est=def] 0 defensores. Headers vistos: {seen_headers[:4]}")
     return fielders
 
 
 def parse_player_detail(html_str: str) -> Dict[str, Any]:
-    """Extrae defensiva POR POSICIÓN (`AL CAMPO`) y juego-a-juego de un jugador desde jugador.php."""
+    """Extrae defensiva POR POSICIÓN (`AL CAMPO`), pitcheo (si lanzó) y juego-a-juego desde jugador.php."""
     p = parse_page(html_str)
     positions: List[Dict[str, Any]] = []
     game_log: List[Dict[str, Any]] = []
+    pitching_summary: Optional[Dict[str, Any]] = None
 
     for tbl in p.tables:
         rows = tbl["rows"]
-        # Tabla Defensiva por posición: AL CAMPO | JJ | PO | AS | E | DP | ... | EJ | PDF
-        h_def, headers_def = find_header_row(rows, ("al campo",))
-        if h_def >= 0:
+
+        # 1. Tabla Defensiva por posición: AL CAMPO | JJ | PO | AS | E | DP | ... | EJ | PDF
+        h_def, headers_def = find_header_row(rows, ("al campo", "po", "as", "pdf"), min_hits=3)
+        if h_def >= 0 and "al campo" in headers_def:
             for r in rows[h_def + 1:]:
                 if len(r) < 5:
                     continue
@@ -645,7 +631,7 @@ def parse_player_detail(html_str: str) -> Dict[str, Any]:
                 asist = to_int(col_val(r, headers_def, "as"))
                 err = to_int(col_val(r, headers_def, "e"))
                 dp = to_int(col_val(r, headers_def, "dp"))
-                ej = to_float(col_val(r, headers_def, "ej"))
+                ej = to_float(col_val(r, headers_def, "ej", "il", "ip"))
                 lt = po + asist + err
                 pdf = round((po + asist) / lt, 3) if lt > 0 else parse_baseball_rate(col_val(r, headers_def, "pdf"))
                 positions.append({
@@ -654,8 +640,39 @@ def parse_player_detail(html_str: str) -> Dict[str, Any]:
                 })
             continue
 
-        # Tabla Juego a Juego ofensivo: NJ | DIA | VS | VB | H | H2 | H3 | HR | CI | CA | BB | K
-        h_log, headers_log = find_header_row(rows, ("dia", "vs"))
+        # 2. Tabla de Pitcheo individual (si el jugador lanzó)
+        h_pic, headers_pic = find_header_row(rows, ("efe", "era", "il", "el", "cl", "bb", "k"), min_hits=4)
+        if h_pic >= 0 and "vb" not in headers_pic and "al campo" not in headers_pic:
+            # Buscar fila de Totales o sumar juego a juego
+            tot_row = None
+            for r in rows[h_pic + 1:]:
+                if any("total" in norm_text(c["text"]) for c in r[:3]):
+                    tot_row = r
+                    break
+            if tot_row and len(tot_row) >= 5:
+                ip_raw = to_float(col_val(tot_row, headers_pic, "il", "el", "ip", "inn"))
+                ip_real = parse_innings(ip_raw)
+                h = to_int(col_val(tot_row, headers_pic, "h", "hc", "hp"))
+                cl = to_int(col_val(tot_row, headers_pic, "cl", "er"))
+                ca = to_int(col_val(tot_row, headers_pic, "cp", "ca", "c"))
+                bb = to_int(col_val(tot_row, headers_pic, "bb"))
+                k = to_int(col_val(tot_row, headers_pic, "k", "so"))
+                hr = to_int(col_val(tot_row, headers_pic, "hr"))
+                g = to_int(col_val(tot_row, headers_pic, "jg", "g"))
+                pr = to_int(col_val(tot_row, headers_pic, "jp", "p"))
+                efe_pub = to_float(col_val(tot_row, headers_pic, "efe", "era"))
+                efe = round(efe_pub, 2) if efe_pub > 0 else (round(cl * 7.0 / ip_real, 2) if ip_real > 0 else 0.0)
+                whip = round((h + bb) / ip_real, 2) if ip_real > 0 else 0.0
+                if ip_real > 0:
+                    pitching_summary = {
+                        "jj": max(1, len(rows) - h_pic - 2), "ji": 0, "g": g, "p": pr, "s": 0,
+                        "ip": ip_raw, "ip_real": round(ip_real, 2),
+                        "h": h, "ca": ca, "cl": cl, "bb": bb, "k": k, "hr": hr, "efe": efe, "whip": whip,
+                    }
+            continue
+
+        # 3. Tabla Juego a Juego ofensivo
+        h_log, headers_log = find_header_row(rows, ("dia", "vs", "vb"), min_hits=2)
         if h_log >= 0 and "vb" in headers_log:
             for r in rows[h_log + 1:]:
                 if len(r) < 6:
@@ -677,7 +694,7 @@ def parse_player_detail(html_str: str) -> Dict[str, Any]:
                     "k": to_int(col_val(r, headers_log, "k")),
                 })
 
-    return {"positions": positions, "game_log": game_log}
+    return {"positions": positions, "game_log": game_log, "pitching_backup": pitching_summary}
 
 
 # ==============================================================================
@@ -702,65 +719,61 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
 
     for c_info in candidates:
         cam_id = c_info["cam_id"]
-        cam_url = f"campeonato.php?lig={lig_id}&cam={cam_id}"
-        cam_html = fetch_html(cam_url)
+        cam_html = fetch_html(f"campeonato.php?lig={lig_id}&cam={cam_id}")
         standings_blocks, teams_map = parse_campeonato_standings(cam_html)
 
-        # Verificar si Relámpago participa en este torneo
-        has_relampago = any(our_kw in norm_text(t["name"]) for t in teams_map.values())
-        if not has_relampago:
-            # Revisar también en texto de standings
-            has_relampago = any(
-                our_kw in norm_text(r["team"])
-                for blk in standings_blocks for r in blk["rows"]
-            )
+        has_relampago = any(our_kw in norm_text(t["name"]) for t in teams_map.values()) or any(
+            our_kw in norm_text(r["team"]) for blk in standings_blocks for r in blk["rows"]
+        )
         if not has_relampago:
             print(f"[SKIP] {c_info['name']} (cam={cam_id}): no participa {cfg['our_team_display']}.")
             continue
 
         print(f"[INFO] Procesando {c_info['name']} (cam={cam_id}, Equipo {c_info['squad']}) — {len(teams_map)} equipos...")
-
-        # 1. Todos los resultados del torneo
         res_html = fetch_html(f"todosresultados.php?lig={lig_id}&cam={cam_id}")
         games = parse_all_results(res_html)
-        print(f"       Resultados extraídos: {len(games)} juegos.")
 
-        # 2. Estadísticas de TODOS los equipos del torneo
         teams_data: Dict[str, Dict[str, Any]] = {}
         relampago_player_ids: Dict[str, str] = {}
+        relampago_roster_names: List[Dict[str, str]] = []
 
         for equ_id, t_meta in teams_map.items():
             tname = t_meta["name"]
             is_ours = our_kw in norm_text(tname)
+            dbg = f"{tname} T{c_info['number']}" if is_ours else ""
 
             ofe_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=ofe")
             pic_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=pic")
             def_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=def")
 
             batting = parse_team_batting(ofe_html)
-            pitching = parse_team_pitching(pic_html)
-            defense = parse_team_defense(def_html)
+            pitching = parse_team_pitching(pic_html, debug_tag=dbg)
+            defense = parse_team_defense(def_html, debug_tag=dbg)
 
             if is_ours:
+                # También leer roster.php para tener a TODOS los inscritos (incluso si aún no batean en T90)
+                ros_html = fetch_html(f"roster.php?equ={equ_id}&lig={lig_id}&cam={cam_id}")
+                relampago_roster_names = parse_team_roster(ros_html)
+                for p in relampago_roster_names:
+                    if p.get("jug_id"):
+                        relampago_player_ids[p["jug_id"]] = p["name"]
                 for lst in (batting, pitching, defense):
                     for p in lst:
                         if p.get("jug_id"):
                             relampago_player_ids[p["jug_id"]] = p["name"]
+                print(f"       Relámpago T{c_info['number']}: roster={len(relampago_roster_names)}, bateo={len(batting)}, pitcheo={len(pitching)}, defensa={len(defense)}")
 
             teams_data[tname] = {
-                "equ_id": equ_id,
-                "name": tname,
-                "is_ours": is_ours,
-                "batting": batting,
-                "pitching": pitching,
-                "defense": defense,
+                "equ_id": equ_id, "name": tname, "is_ours": is_ours,
+                "roster": relampago_roster_names if is_ours else [],
+                "batting": batting, "pitching": pitching, "defense": defense,
             }
-            time.sleep(0.08)
+            time.sleep(0.06)
 
-        # 3. Fichas detalladas (defensiva POR POSICIÓN + game log) de nuestros jugadores de Relámpago
+        # Fichas detalladas de Relámpago (posiciones AL CAMPO + backup de pitcheo)
         player_details: Dict[str, Dict[str, Any]] = {}
         if relampago_player_ids:
-            print(f"       Extrayendo posiciones defensivas de {len(relampago_player_ids)} jugadores de Relámpago...")
+            print(f"       Leyendo fichas individuales de {len(relampago_player_ids)} jugadores de Relámpago...")
             for jug_id, pname in relampago_player_ids.items():
                 j_html = fetch_html(f"jugador.php?jug={jug_id}&cam={cam_id}")
                 if j_html:
@@ -768,17 +781,12 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
                     det["name"] = pname
                     det["jug_id"] = jug_id
                     player_details[jug_id] = det
-                time.sleep(0.06)
+                time.sleep(0.05)
 
         tournaments_out.append({
-            "cam_id": cam_id,
-            "number": c_info["number"],
-            "name": c_info["name"],
-            "squad": c_info["squad"],
-            "standings_blocks": standings_blocks,
-            "games": games,
-            "teams": teams_data,
-            "relampago_player_details": player_details,
+            "cam_id": cam_id, "number": c_info["number"], "name": c_info["name"], "squad": c_info["squad"],
+            "standings_blocks": standings_blocks, "games": games,
+            "teams": teams_data, "relampago_player_details": player_details,
         })
 
     snapshot = {
@@ -790,7 +798,7 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[OK] Snapshot de softbol guardado en {output_path} ({len(tournaments_out)} torneos de Relámpago).")
+    print(f"[OK] Snapshot v2 guardado en {output_path} ({len(tournaments_out)} torneos de Relámpago).")
 
 
 if __name__ == "__main__":
