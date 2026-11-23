@@ -240,8 +240,10 @@ def normalize_position(raw: str) -> str:
         return "CF"
     if "derech" in s or "right" in s or s == "rf" or "(9)" in s:
         return "RF"
-    if "short field" in s or "shortfield" in s or s == "sf" or "(10)" in s or "4to" in s or "cuarto" in s or "(11)" in s:
-        return "SF"
+    if "sfe" in s or "externo" in s or "4to" in s or "cuarto" in s or "(11)" in s:
+        return "SFE"
+    if "sfi" in s or "interno" in s or "short field" in s or "shortfield" in s or s == "sf" or "(10)" in s:
+        return "SFI"
     if "design" in s or s in ("bd", "dh", "ep") or "bateador" in s:
         return "BD"
     return raw.strip()
@@ -493,6 +495,10 @@ def parse_team_batting(html_str: str) -> List[Dict[str, Any]]:
 
 
 def parse_team_pitching(html_str: str, debug_tag: str = "") -> List[Dict[str, Any]]:
+    """
+    Extrae tabla de pitcheo desde estadisticasequipo.php?...&est=pic.
+    Columnas reales UNIMET: N | PITCHER | G | P | B | IP | VB | HP | H2 | H3 | HR | CP | CL | K | BB | SF | WP | EFE | AVG | WHIP
+    """
     p = parse_page(html_str)
     pitchers: List[Dict[str, Any]] = []
     seen_headers = []
@@ -503,13 +509,13 @@ def parse_team_pitching(html_str: str, debug_tag: str = "") -> List[Dict[str, An
             seen_headers.append([norm_text(c["text"]) for c in rows[0][:14]])
         h_idx, headers = find_header_row(
             rows,
-            ("efe", "era", "efec", "il", "ip", "el", "inn", "in", "cl", "er", "jg", "jp", "js", "whip", "bb", "k"),
-            min_hits=3,
+            ("pitcher", "efe", "era", "ip", "il", "el", "cl", "cp", "hp", "whip", "wp"),
+            min_hits=4,
         )
         if h_idx < 0:
             continue
-        # Evitar confundir con tabla de bateo (si tiene VB/SLG) o defensa (si tiene PO/AS)
-        if "vb" in headers or "slg" in headers or ("po" in headers and "as" in headers):
+        # Evitar confundir con bateo (tiene SLG/OPS/PDE) o defensa (tiene PO/LT/PDF)
+        if "slg" in headers or "ops" in headers or "pde" in headers or "po" in headers or "pdf" in headers:
             continue
 
         for r in rows[h_idx + 1:]:
@@ -524,28 +530,36 @@ def parse_team_pitching(html_str: str, debug_tag: str = "") -> List[Dict[str, An
             g = to_int(col_val(r, headers, "jg", "g", "pg", "w"))
             pr = to_int(col_val(r, headers, "jp", "p", "pp", "l"))
             s = to_int(col_val(r, headers, "js", "s", "sv"))
-            ip_raw = to_float(col_val(r, headers, "il", "el", "ip", "inn", "in", "ej", "entradas"))
+            ip_raw = to_float(col_val(r, headers, "ip", "il", "el", "inn", "in", "ej", "entradas"))
             ip_real = parse_innings(ip_raw)
-            h = to_int(col_val(r, headers, "h", "hc", "hp", "hits"))
+            h = to_int(col_val(r, headers, "hp", "h", "hc", "hits"))
             ca = to_int(col_val(r, headers, "cp", "ca", "c", "r"))
             cl = to_int(col_val(r, headers, "cl", "er"))
             bb = to_int(col_val(r, headers, "bb", "bo"))
             k = to_int(col_val(r, headers, "k", "so", "pn", "kp"))
             hr = to_int(col_val(r, headers, "hr", "jr"))
-            efe_pub = to_float(col_val(r, headers, "efe", "era", "efec", "ef"))
-            efe = round(efe_pub, 2) if efe_pub > 0 else (round(cl * 7.0 / ip_real, 2) if ip_real > 0 else 0.0)
-            whip_pub = to_float(col_val(r, headers, "whip"))
-            whip = round((h + bb) / ip_real, 2) if ip_real > 0 else whip_pub
+            wp = to_int(col_val(r, headers, "wp"))
+            vb_enf = to_int(col_val(r, headers, "vb"))
+            avg_against = parse_baseball_rate(col_val(r, headers, "avg", "ave"))
+            efe_str = col_val(r, headers, "efe", "era", "efec", "ef")
+            efe_pub = to_float(efe_str)
+            efe = round(efe_pub, 2) if (efe_str.strip() != "" and "---" not in efe_str) else (round(cl * 7.0 / ip_real, 2) if ip_real > 0 else 0.0)
+            whip_str = col_val(r, headers, "whip")
+            whip_pub = to_float(whip_str)
+            whip = round(whip_pub, 2) if whip_pub > 0 else (round((h + bb) / ip_real, 2) if ip_real > 0 else 0.0)
 
-            if jj == 0 and ip_real == 0 and g == 0 and pr == 0 and h == 0:
+            if jj == 0 and ip_real == 0 and g == 0 and pr == 0 and h == 0 and bb == 0:
                 continue
+            if jj == 0:
+                jj = max(g + pr, 1 if ip_real > 0 else 0)
 
             pitchers.append({
                 "jug_id": jug_id, "name": name,
                 "jj": jj, "ji": ji, "g": g, "p": pr, "s": s,
                 "ip": ip_raw, "ip_real": round(ip_real, 2),
-                "h": h, "ca": ca, "cl": cl, "bb": bb, "k": k, "hr": hr,
-                "efe": efe, "whip": whip,
+                "vb_enf": vb_enf, "h": h, "ca": ca, "cl": cl,
+                "bb": bb, "k": k, "hr": hr, "wp": wp,
+                "efe": efe, "whip": whip, "avg_against": avg_against,
             })
         if pitchers:
             break
@@ -556,6 +570,10 @@ def parse_team_pitching(html_str: str, debug_tag: str = "") -> List[Dict[str, An
 
 
 def parse_team_defense(html_str: str, debug_tag: str = "") -> List[Dict[str, Any]]:
+    """
+    Extrae tabla de defensiva desde estadisticasequipo.php?...&est=def.
+    Columnas reales UNIMET: N | JUGADOR | IJ | PO | A | E | DP | LT | PDF
+    """
     p = parse_page(html_str)
     fielders: List[Dict[str, Any]] = []
     seen_headers = []
@@ -566,12 +584,12 @@ def parse_team_defense(html_str: str, debug_tag: str = "") -> List[Dict[str, Any
             seen_headers.append([norm_text(c["text"]) for c in rows[0][:14]])
         h_idx, headers = find_header_row(
             rows,
-            ("po", "as", "a", "e", "err", "dp", "ej", "lt", "tl", "pdf", "fld", "pb"),
-            min_hits=3,
+            ("ij", "ej", "po", "as", "a", "e", "err", "dp", "lt", "tl", "pdf", "fld"),
+            min_hits=4,
         )
         if h_idx < 0:
             continue
-        if "vb" in headers or "efe" in headers or "era" in headers:
+        if "vb" in headers or "efe" in headers or "era" in headers or "slg" in headers:
             continue
 
         for r in rows[h_idx + 1:]:
@@ -582,11 +600,12 @@ def parse_team_defense(html_str: str, debug_tag: str = "") -> List[Dict[str, Any
                 continue
 
             jj = to_int(col_val(r, headers, "jj", "j"))
+            ij_raw = to_float(col_val(r, headers, "ij", "ej", "il", "ip", "inn", "in"))
+            ej = round(parse_innings(ij_raw), 2)
             po = to_int(col_val(r, headers, "po", "o"))
-            asist = to_int(col_val(r, headers, "as", "a"))
+            asist = to_int(col_val(r, headers, "a", "as"))
             err = to_int(col_val(r, headers, "e", "err"))
             dp = to_int(col_val(r, headers, "dp"))
-            ej = to_float(col_val(r, headers, "ej", "il", "ip", "inn", "in"))
             lt = po + asist + err
             pdf = round((po + asist) / lt, 3) if lt > 0 else parse_baseball_rate(col_val(r, headers, "pdf", "fld", "avg"))
             pos_col = normalize_position(col_val(r, headers, "pos", "posicion", "al campo"))
@@ -631,7 +650,7 @@ def parse_player_detail(html_str: str) -> Dict[str, Any]:
                 asist = to_int(col_val(r, headers_def, "as"))
                 err = to_int(col_val(r, headers_def, "e"))
                 dp = to_int(col_val(r, headers_def, "dp"))
-                ej = to_float(col_val(r, headers_def, "ej", "il", "ip"))
+                ej = round(parse_innings(to_float(col_val(r, headers_def, "ej", "ij", "il", "ip"))), 2)
                 lt = po + asist + err
                 pdf = round((po + asist) / lt, 3) if lt > 0 else parse_baseball_rate(col_val(r, headers_def, "pdf"))
                 positions.append({

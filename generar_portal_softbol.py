@@ -43,6 +43,35 @@ def slugify(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", norm_text(s)).strip("-") or "equipo"
 
 
+DEFAULT_PLAYER_ALIASES: Dict[str, str] = {
+    "radames larez": "Radames Lares",
+    "radames lares": "Radames Lares",
+    "pedro branacaccio": "Pedro Brancaccio",
+    "pedro brancaccio": "Pedro Brancaccio",
+    "andres vahamonde": "Andres Vaamonde",
+    "andres vaamonde": "Andres Vaamonde",
+}
+
+
+def build_alias_map(cfg: Dict[str, Any]) -> Dict[str, str]:
+    amap = dict(DEFAULT_PLAYER_ALIASES)
+    for k, v in (cfg.get("player_aliases") or {}).items():
+        if k and v:
+            amap[norm_text(k)] = str(v).strip()
+    return amap
+
+
+def canonical_player_key_and_name(raw_name: str, alias_map: Dict[str, str]) -> Tuple[str, str]:
+    clean = re.sub(r"\s+", " ", str(raw_name or "")).strip()
+    n = norm_text(clean)
+    if n in alias_map:
+        canon = alias_map[n]
+        return norm_text(canon), canon
+    # Si viene todo en mayúsculas (ej. "MARIO VEROCHI"), dejar en formato título limpio
+    disp = clean.title() if clean.isupper() else clean
+    return n, disp
+
+
 def normalize_manual_pos(raw: str) -> str:
     s = norm_text(raw)
     if not s:
@@ -56,12 +85,13 @@ def normalize_manual_pos(raw: str) -> str:
     if s in ("lf", "left", "left field", "jardin izquierdo", "izquierdo", "7"): return "LF"
     if s in ("cf", "center", "center field", "jardin central", "central", "8"): return "CF"
     if s in ("rf", "right", "right field", "jardin derecho", "derecho", "9"): return "RF"
-    if s in ("sf", "short field", "shortfield", "4to", "4to field", "cuarto", "10", "11"): return "SF"
+    if s in ("sfe", "short field externo", "shortfield externo", "sf externo", "externo", "4to", "4to field", "cuarto", "11"): return "SFE"
+    if s in ("sfi", "short field interno", "shortfield interno", "sf interno", "interno", "sf", "short field", "shortfield", "10"): return "SFI"
     if s in ("bd", "dh", "ep", "designado", "bateador designado", "extra"): return "BD"
     return raw.strip().upper()
 
 
-def load_manual_positions(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def load_manual_positions(cfg: Dict[str, Any], alias_map: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
     """
     Lee `posiciones_relampago.csv` tolerando:
       - Codificación UTF-8, UTF-8-BOM o Windows-1252/Latin-1 (Excel en español con ñ y acentos)
@@ -106,7 +136,7 @@ def load_manual_positions(cfg: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             name = (r.get("jugador") or r.get("name") or r.get("nombre") or "").strip()
             if not name:
                 continue
-            k = norm_text(name)
+            k, name = canonical_player_key_and_name(name, alias_map)
             if k in out:
                 continue
             pos1 = normalize_manual_pos(r.get("pos_primaria") or r.get("posicion_primaria") or r.get("pos1") or r.get("posicion") or "")
@@ -235,6 +265,7 @@ def build_view_for_tournaments(
     selected_tournaments: List[Dict[str, Any]],
     dual_squad_players: set,
     manual_pos: Dict[str, Dict[str, Any]],
+    alias_map: Dict[str, str],
     cfg: Dict[str, Any],
 ) -> Dict[str, Any]:
     our_kw = norm_text(cfg.get("our_team_keyword", "Relampago"))
@@ -277,15 +308,19 @@ def build_view_for_tournaments(
 
         # Detalle individual de jugador.php (AL CAMPO + backup de pitcheo)
         for _, det in t.get("relampago_player_details", {}).items():
-            pn = norm_text(det.get("name", ""))
+            pn, cname = canonical_player_key_and_name(det.get("name", ""), alias_map)
             if not pn:
                 continue
-            our_display_names[pn] = det["name"]
+            our_display_names[pn] = cname
             for pos_row in det.get("positions", []):
-                our_pos_by_p[pn][pos_row["pos"]].append(pos_row)
+                pcode = normalize_manual_pos(pos_row.get("pos") or pos_row.get("pos_raw") or "")
+                if pcode:
+                    pr_copy = dict(pos_row)
+                    pr_copy["pos"] = pcode
+                    our_pos_by_p[pn][pcode].append(pr_copy)
             if det.get("pitching_backup"):
                 pb = dict(det["pitching_backup"])
-                pb["name"] = det["name"]
+                pb["name"] = cname
                 our_pic_backup_by_p[pn].append(pb)
 
         for tname, tdata in t.get("teams", {}).items():
@@ -297,17 +332,26 @@ def build_view_for_tournaments(
 
             if is_ours:
                 for r_p in tdata.get("roster", []):
-                    k = norm_text(r_p["name"])
+                    k, cname = canonical_player_key_and_name(r_p["name"], alias_map)
                     if k:
-                        our_display_names[k] = r_p["name"]
+                        our_display_names[k] = cname
                 for b in tdata.get("batting", []):
-                    k = norm_text(b["name"]); our_display_names[k] = b["name"]; our_bat_by_p[k].append(b)
+                    k, cname = canonical_player_key_and_name(b["name"], alias_map)
+                    if k:
+                        our_display_names[k] = cname; our_bat_by_p[k].append(b)
                 for pc in tdata.get("pitching", []):
-                    k = norm_text(pc["name"]); our_display_names[k] = pc["name"]; our_pic_by_p[k].append(pc)
+                    k, cname = canonical_player_key_and_name(pc["name"], alias_map)
+                    if k:
+                        our_display_names[k] = cname; our_pic_by_p[k].append(pc)
                 for df in tdata.get("defense", []):
-                    k = norm_text(df["name"]); our_display_names[k] = df["name"]; our_def_by_p[k].append(df)
-                    if df.get("pos"):
-                        our_pos_by_p[k][df["pos"]].append(df)
+                    k, cname = canonical_player_key_and_name(df["name"], alias_map)
+                    if k:
+                        our_display_names[k] = cname; our_def_by_p[k].append(df)
+                        if df.get("pos"):
+                            pcode = normalize_manual_pos(df["pos"])
+                            if pcode:
+                                df_c = dict(df); df_c["pos"] = pcode
+                                our_pos_by_p[k][pcode].append(df_c)
 
     # Incluir también jugadores definidos en `posiciones_relampago.csv` si coinciden con el equipo (A/B)
     for mk, mv in manual_pos.items():
@@ -336,10 +380,18 @@ def build_view_for_tournaments(
             real_pos_list.append(agg_p)
         real_pos_list.sort(key=lambda x: (-x["ej"], -x["jj"], -x["pdf"]))
 
-        # Defensiva global: si est=def vino vacío o con menos innings, calcular directo desde AL CAMPO!
+        # Defensiva global: priorizar est=def (que trae IJ/PO/A/E/DP/PDF aunque no traiga columna JJ);
+        # si viene vacía, usar los totales de AL CAMPO (jugador.php) y conservar JJ de AL CAMPO si está disponible.
         dfn_raw = aggregate_defense(our_def_by_p.get(pk, []))
         dfn_from_pos = aggregate_defense(real_pos_list) if real_pos_list else {"jj": 0, "po": 0, "as": 0, "e": 0, "dp": 0, "ej": 0.0, "pdf": 0.0}
-        dfn = dfn_raw if (dfn_raw["po"] + dfn_raw["as"] + dfn_raw["e"] >= dfn_from_pos["po"] + dfn_from_pos["as"] + dfn_from_pos["e"] and dfn_raw["jj"] > 0) else dfn_from_pos
+        raw_has_data = (dfn_raw["ej"] > 0) or (dfn_raw["po"] + dfn_raw["as"] + dfn_raw["e"] > 0)
+        pos_has_more = (dfn_from_pos["ej"] > dfn_raw["ej"] + 0.5) and (dfn_from_pos["po"] + dfn_from_pos["as"] + dfn_from_pos["e"] > dfn_raw["po"] + dfn_raw["as"] + dfn_raw["e"])
+        if raw_has_data and not pos_has_more:
+            dfn = dict(dfn_raw)
+            if dfn["jj"] == 0 and dfn_from_pos["jj"] > 0:
+                dfn["jj"] = dfn_from_pos["jj"]
+        else:
+            dfn = dfn_from_pos
 
         mp = manual_pos.get(pk, {})
         fixed_pos1 = mp.get("pos1", "")
@@ -384,18 +436,18 @@ def build_view_for_tournaments(
         if is_ours:
             bat_players = [{"name": p["name"], **p["batting"]} for p in relampago_roster]
             pic_players = [{"name": p["name"], **p["pitching"]} for p in relampago_roster if p["pitching"]["ip"] > 0 or p["is_pitcher"]]
-            def_players = [{"name": p["name"], "pos": p["primary_pos"], **p["defense"]} for p in relampago_roster if p["defense"]["jj"] > 0 or p["defense"]["ej"] > 0 or p["fixed_pos1"]]
+            def_players = [{"name": p["name"], "pos": p["primary_pos"], **p["defense"]} for p in relampago_roster if p["defense"]["jj"] > 0 or p["defense"]["ej"] > 0 or (p["defense"]["po"] + p["defense"]["as"] + p["defense"]["e"]) > 0 or p["fixed_pos1"]]
         else:
             p_bat_grp: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
             p_pic_grp: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
             p_def_grp: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
             p_names: Dict[str, str] = {}
             for b in teams_bat_raw.get(tname, []):
-                k = norm_text(b["name"]); p_names[k] = b["name"]; p_bat_grp[k].append(b)
+                k, cname = canonical_player_key_and_name(b["name"], alias_map); p_names[k] = cname; p_bat_grp[k].append(b)
             for pc in teams_pic_raw.get(tname, []):
-                k = norm_text(pc["name"]); p_names[k] = pc["name"]; p_pic_grp[k].append(pc)
+                k, cname = canonical_player_key_and_name(pc["name"], alias_map); p_names[k] = cname; p_pic_grp[k].append(pc)
             for df in teams_def_raw.get(tname, []):
-                k = norm_text(df["name"]); p_names[k] = df["name"]; p_def_grp[k].append(df)
+                k, cname = canonical_player_key_and_name(df["name"], alias_map); p_names[k] = cname; p_def_grp[k].append(df)
             bat_players = [{"name": p_names[k], **aggregate_batting(v)} for k, v in p_bat_grp.items()]
             pic_players = [{"name": p_names[k], **aggregate_pitching(v)} for k, v in p_pic_grp.items()]
             def_players = [{"name": p_names[k], **aggregate_defense(v)} for k, v in p_def_grp.items()]
@@ -597,7 +649,7 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
       const root = document.getElementById("app");
       const esc = (s) => String(s ?? "").replace(/[&<>"']/g, m => ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}}[m]));
       const fmtRate = (v) => v ? (v >= 1 ? v.toFixed(3) : v.toFixed(3).replace(/^0/, "")) : ".000";
-      const ALL_POS = ["", "P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "SF", "BD"];
+      const ALL_POS = ["", "P", "C", "1B", "2B", "3B", "SS", "SFI", "SFE", "LF", "CF", "RF", "BD"];
 
       let activeSquad = data.default_squad || "A";
       let activeViewId = data.default_view_id;
@@ -679,27 +731,28 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
           pool.sort((a, b) => fn(b) - fn(a));
           return pool.shift();
         }};
-        const slots = new Array(Math.min(10, scored.length)).fill(null);
+        const slots = new Array(Math.min(11, scored.length)).fill(null);
         const roles = [
           {{ lbl: "1° Leadoff", cls: "lead" }}, {{ lbl: "2° Contacto", cls: "lead" }},
           {{ lbl: "3° Mejor Bate", cls: "power" }}, {{ lbl: "4° Cleanup", cls: "power" }},
           {{ lbl: "5° Poder", cls: "power" }}, {{ lbl: "6° Producción", cls: "" }},
           {{ lbl: "7° Contacto", cls: "" }}, {{ lbl: "8° Soporte", cls: "" }},
-          {{ lbl: "9° Puente", cls: "" }}, {{ lbl: "10° 2do Leadoff", cls: "lead" }},
+          {{ lbl: "9° Puente", cls: "" }}, {{ lbl: "10° Contacto", cls: "" }},
+          {{ lbl: "11° 2do Leadoff", cls: "lead" }},
         ];
         if (slots.length >= 1) slots[0] = takeBest(x => x.adjObp * 1.4 + (x.p.batting.ca * 0.02));
         if (slots.length >= 4) slots[3] = takeBest(x => x.adjSlg * 1.3 + x.adjOps * 0.5 + x.p.batting.hr * 0.08 + x.p.batting.ci * 0.015);
         if (slots.length >= 3) slots[2] = takeBest(x => x.adjOps * 1.3 + x.adjAvg * 0.4);
         if (slots.length >= 2) slots[1] = takeBest(x => x.adjObp * 0.9 + x.adjAvg * 0.9);
         if (slots.length >= 5) slots[4] = takeBest(x => x.adjSlg + x.adjOps);
-        if (slots.length === 10) slots[9] = takeBest(x => x.adjObp * 1.2 + x.adjAvg * 0.4);
+        if (slots.length >= 10) slots[slots.length - 1] = takeBest(x => x.adjObp * 1.2 + x.adjAvg * 0.4);
         for (let i = 0; i < slots.length; i++) if (!slots[i]) slots[i] = takeBest(x => x.adjOps);
         const extras = pool.map((x, idx) => ({{ ...x, order: slots.length + idx + 1, role: {{ lbl: "BE / Banca", cls: "" }} }}));
         return slots.filter(Boolean).map((x, idx) => ({{ ...x, order: idx + 1, role: roles[idx] || {{ lbl: "Bate", cls: "" }} }})).concat(extras);
       }}
 
       function buildDefensiveAlignment(availPlayers, topPitcherName) {{
-        const POS_ORDER = ["P", "C", "SS", "2B", "CF", "SF", "1B", "3B", "LF", "RF"];
+        const POS_ORDER = ["P", "C", "SS", "2B", "SFI", "CF", "SFE", "1B", "3B", "LF", "RF"];
         const assigned = {{}};
         const used = new Set();
         const availNames = new Set(availPlayers.map(p => p.name));
@@ -726,8 +779,8 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
           const hit = (p.positions || []).find(x => x.pos === pos);
           if (hit) s += 120 + (hit.ej || 0) * 3 + (hit.pdf || 0.85) * 40 + (hit.jj || 0) * 4;
           const prim = p.primary_pos;
-          if (["LF","CF","RF","SF"].includes(pos) && ["LF","CF","RF","SF"].includes(prim)) s += 25;
-          if (["2B","SS","3B"].includes(pos) && ["2B","SS","3B"].includes(prim)) s += 25;
+          if (["LF","CF","RF","SFE"].includes(pos) && ["LF","CF","RF","SFE"].includes(prim)) s += 25;
+          if (["2B","SS","3B","SFI"].includes(pos) && ["2B","SS","3B","SFI"].includes(prim)) s += 25;
           if (pos === "1B" && ["3B","C"].includes(prim)) s += 20;
           return s;
         }};
@@ -750,13 +803,13 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
           return parts.length >= 2 ? `${{parts[0][0]}}. ${{parts[1]}}` : parts[0].slice(0, 10);
         }};
         const coords = {{
-          CF:[210,42], LF:[78,86], RF:[342,86], SF:[210,112],
-          SS:[148,148], "2B":[272,148], "3B":[112,206], "1B":[308,206],
-          P:[210,210], C:[210,286]
+          CF:[210,26], LF:[66,70], SFE:[210,74], RF:[354,70],
+          SFI:[210,122], SS:[122,158], "2B":[298,158],
+          "3B":[96,214], P:[210,210], "1B":[324,214], C:[210,290]
         }};
         const nodes = Object.entries(coords).map(([pos, [x, y]]) => `
           <g transform="translate(${{x}},${{y}})">
-            <rect x="-46" y="-15" width="92" height="30" rx="7" fill="#0e2644" stroke="#f0d72b" stroke-width="1.6" />
+            <rect x="-42" y="-14" width="84" height="28" rx="7" fill="#0e2644" stroke="#f0d72b" stroke-width="1.6" />
             <text x="0" y="-2" text-anchor="middle" fill="#f0d72b" font-size="9.5" font-weight="900" font-family="monospace">${{pos}}</text>
             <text x="0" y="10" text-anchor="middle" fill="#ffffff" font-size="10" font-weight="700" font-family="sans-serif">${{esc(shortName(defMap[pos]))}}</text>
           </g>
@@ -860,7 +913,7 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
         }} else {{
           statsTableHtml = `
             <div class="tw"><table>
-              <thead><tr><th>Jugador</th><th>Posición Fija</th><th>Posiciones Jugadas (AL CAMPO)</th><th class="num">JJ</th><th class="num">EJ</th><th class="num">PO</th><th class="num">AS</th><th class="num">E</th><th class="num">DP</th><th class="num">PDF</th></tr></thead>
+              <thead><tr><th>Jugador</th><th>Posición Fija</th><th>Posiciones Jugadas (AL CAMPO)</th><th class="num">JJ</th><th class="num">IJ/EJ</th><th class="num">PO</th><th class="num">AS</th><th class="num">E</th><th class="num">DP</th><th class="num">PDF</th></tr></thead>
               <tbody>
                 ${{defTableList.map(p => {{
                   const d = p.defense;
@@ -873,7 +926,7 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
                     <td class="num">${{d.jj}}</td><td class="num">${{d.ej.toFixed(1)}}</td>
                     <td class="num">${{d.po}}</td><td class="num">${{d.as}}</td>
                     <td class="num" style="color:${{d.e>=2?'var(--red)':'inherit'}}"><strong>${{d.e}}</strong></td>
-                    <td class="num">${{d.dp}}</td><td class="num"><strong>${{d.jj > 0 || d.ej > 0 ? fmtRate(d.pdf) : "—"}}</strong></td>
+                    <td class="num">${{d.dp}}</td><td class="num"><strong>${{(d.po + d.as + d.e) > 0 ? fmtRate(d.pdf) : "—"}}</strong></td>
                   </tr>`;
                 }}).join("") || `<tr><td colspan="10" class="center" style="color:var(--light)">Sin datos defensivos aún.</td></tr>`}}
               </tbody>
@@ -1002,7 +1055,7 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
 
             <div class="three-col">
               <div class="subcard">
-                <h3>🏏 Lineup Ofensivo Sugerido (1° al 10°) <span style="font-size:11.5px;color:var(--light);font-weight:600">OBP / SLG / OPS</span></h3>
+                <h3>🏏 Lineup Ofensivo Sugerido (1° al 11°) <span style="font-size:11.5px;color:var(--light);font-weight:600">OBP / SLG / OPS</span></h3>
                 ${{lineup.map(slot => {{
                   const b = slot.p.batting;
                   return `
@@ -1146,7 +1199,7 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
             `⚾ *Pitcher sugerido:* ${{topPitcherName || "Por definir"}}`,
             "",
             "*🏏 LINEUP OFENSIVO:*",
-            ...lineup.slice(0, 10).map(s => `${{s.order}}. ${{s.p.name}} (${{s.role.lbl}} · AVG ${{fmtRate(s.p.batting.avg)}})`),
+            ...lineup.slice(0, 11).map(s => `${{s.order}}. ${{s.p.name}} (${{s.role.lbl}} · AVG ${{fmtRate(s.p.batting.avg)}})`),
             "",
             "*🧤 DEFENSA:*",
             ...defense.order.map(pos => `• *${{pos}}:* ${{defense.map[pos]}}`),
@@ -1298,7 +1351,7 @@ def render_team_report(team_payload: Dict[str, Any]) -> str:
               </tbody>
             </table></div>
             <div class="tw"><table>
-              <thead><tr><th>Defensor</th><th class="num">JJ</th><th class="num">EJ</th><th class="num">PO</th><th class="num">AS</th><th class="num">E</th><th class="num">DP</th><th class="num">PDF</th></tr></thead>
+              <thead><tr><th>Defensor</th><th class="num">JJ</th><th class="num">IJ/EJ</th><th class="num">PO</th><th class="num">AS</th><th class="num">E</th><th class="num">DP</th><th class="num">PDF</th></tr></thead>
               <tbody>
                 ${{v.defense.map(d => `<tr><td><strong>${{esc(d.name)}}</strong>${{d.e >= 3 ? ' <span class="tag tag-y">Atacar</span>' : ""}}</td><td class="num">${{d.jj}}</td><td class="num">${{d.ej.toFixed(1)}}</td><td class="num">${{d.po}}</td><td class="num">${{d.as}}</td><td class="num" style="color:${{d.e>=2?'var(--red)':'inherit'}}"><strong>${{d.e}}</strong></td><td class="num">${{d.dp}}</td><td class="num"><strong>${{fmtRate(d.pdf)}}</strong></td></tr>`).join("") || `<tr><td colspan="8" style="text-align:center;color:var(--light)">Sin defensiva registrada aún.</td></tr>`}}
               </tbody>
@@ -1368,7 +1421,8 @@ def main() -> None:
 
     cfg = json.loads(args.config.read_text(encoding="utf-8"))
     snapshot = build_demo_snapshot() if args.demo else json.loads(args.snapshot.read_text(encoding="utf-8"))
-    manual_pos = load_manual_positions(cfg)
+    alias_map = build_alias_map(cfg)
+    manual_pos = load_manual_positions(cfg, alias_map)
 
     out_dir = Path(cfg.get("output_dir", "docs"))
     teams_dir = out_dir / "equipos"
@@ -1391,7 +1445,9 @@ def main() -> None:
             if tdata.get("is_ours") or our_kw in norm_text(tname):
                 for lst in (tdata.get("roster", []), tdata.get("batting", []), tdata.get("pitching", []), tdata.get("defense", [])):
                     for p in lst:
-                        (players_in_a if sq == "A" else players_in_b).add(norm_text(p["name"]))
+                        ck, _ = canonical_player_key_and_name(p["name"], alias_map)
+                        if ck:
+                            (players_in_a if sq == "A" else players_in_b).add(ck)
     dual_squad_players = players_in_a & players_in_b
 
     views: Dict[str, Dict[str, Any]] = {}
@@ -1400,21 +1456,21 @@ def main() -> None:
     for t in tournaments:
         vid = f"t{t['number']}_{t['cam_id']}"
         lbl = f"Torneo {t['number']} · Equipo {t['squad']}" if t.get("number") else f"{t['name']} (Eq. {t['squad']})"
-        views[vid] = build_view_for_tournaments(vid, lbl, t["squad"], [t], dual_squad_players, manual_pos, cfg)
+        views[vid] = build_view_for_tournaments(vid, lbl, t["squad"], [t], dual_squad_players, manual_pos, alias_map, cfg)
         view_index.append({"id": vid, "label": lbl, "squad": t["squad"]})
 
     t_a = [t for t in tournaments if t.get("squad") == "A"]
     if len(t_a) > 1:
-        views["hist_A"] = build_view_for_tournaments("hist_A", f"Histórico Equipo A ({len(t_a)} torneos)", "A", t_a, dual_squad_players, manual_pos, cfg)
+        views["hist_A"] = build_view_for_tournaments("hist_A", f"Histórico Equipo A ({len(t_a)} torneos)", "A", t_a, dual_squad_players, manual_pos, alias_map, cfg)
         view_index.append({"id": "hist_A", "label": f"Histórico Equipo A ({len(t_a)} torneos)", "squad": "A"})
 
     t_b = [t for t in tournaments if t.get("squad") == "B"]
     if len(t_b) > 1:
-        views["hist_B"] = build_view_for_tournaments("hist_B", f"Histórico Equipo B ({len(t_b)} torneos)", "B", t_b, dual_squad_players, manual_pos, cfg)
+        views["hist_B"] = build_view_for_tournaments("hist_B", f"Histórico Equipo B ({len(t_b)} torneos)", "B", t_b, dual_squad_players, manual_pos, alias_map, cfg)
         view_index.append({"id": "hist_B", "label": f"Histórico Equipo B ({len(t_b)} torneos)", "squad": "B"})
 
     if len(tournaments) > 1:
-        views["hist_ALL"] = build_view_for_tournaments("hist_ALL", f"Histórico Global A + B ({len(tournaments)} torneos)", "ALL", tournaments, dual_squad_players, manual_pos, cfg)
+        views["hist_ALL"] = build_view_for_tournaments("hist_ALL", f"Histórico Global A + B ({len(tournaments)} torneos)", "ALL", tournaments, dual_squad_players, manual_pos, alias_map, cfg)
         view_index.append({"id": "hist_ALL", "label": f"Histórico Global A + B ({len(tournaments)} torneos)", "squad": "ALL"})
 
     default_squad = "A" if any(v["squad"] == "A" for v in view_index) else view_index[0]["squad"]

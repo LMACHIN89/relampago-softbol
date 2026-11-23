@@ -15,5 +15,13 @@
   "default_new_tournament_squad": "A",
   "logo_file": "logo_relampago.png",
   "manual_positions_csv": "posiciones_relampago.csv",
-  "output_dir": "docs"
+  "output_dir": "docs",
+  "player_aliases": {
+    "radames larez": "Radames Lares",
+    "radames lares": "Radames Lares",
+    "pedro branacaccio": "Pedro Brancaccio",
+    "pedro brancaccio": "Pedro Brancaccio",
+    "andres vahamonde": "Andres Vaamonde",
+    "andres vaamonde": "Andres Vaamonde"
+  }
 }
