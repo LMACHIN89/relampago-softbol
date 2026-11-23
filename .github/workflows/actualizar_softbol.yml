@@ -1,9 +1,9 @@
 name: relampago-softbol
 
 on:
-  # Se ejecuta automáticamente todos los lunes a las 7:00 AM hora de Caracas (11:00 UTC)
+  # Se ejecuta automáticamente todos los jueves a las 7:00 AM hora de Caracas (11:00 UTC)
   schedule:
-    - cron: '0 11 * * 1'
+    - cron: '0 11 * * 4'
   # Permite ejecutarlo manualmente con un clic desde la pestaña "Actions"
   workflow_dispatch:
 
