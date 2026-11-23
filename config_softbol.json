@@ -1,0 +1,19 @@
+{
+  "league_id": 174,
+  "league_url": "https://beisbolysoftbol.com/liga.php?lig=174&Liga%20de%20Softbol%20VENEZUELA-UNIMET",
+  "league_name": "Liga de Softbol VENEZUELA-UNIMET",
+  "our_team_keyword": "Relampago",
+  "our_team_display": "Relámpago del Caribe",
+  "slogan": "¡CACHAM!",
+  "authors": "Cuerpo Técnico · Scouting Relámpago del Caribe",
+  "min_tournament_number": 87,
+  "tournaments_squad_map": {
+    "87": "A",
+    "89": "A",
+    "90": "B"
+  },
+  "default_new_tournament_squad": "A",
+  "logo_file": "logo_relampago.png",
+  "manual_positions_csv": "data/posiciones_manuales.csv",
+  "output_dir": "docs"
+}

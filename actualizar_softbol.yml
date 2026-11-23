@@ -1,0 +1,40 @@
+name: Actualizar Scouting Relámpago Softbol
+
+on:
+  # Se ejecuta automáticamente todos los lunes a las 7:00 AM hora de Caracas (11:00 UTC)
+  schedule:
+    - cron: '0 11 * * 1'
+  # Permite ejecutarlo manualmente con un clic desde la pestaña "Actions"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  actualizar-softbol:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar archivos del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Extraer datos actualizados de BeisbolySoftbol.com (UNIMET)
+        run: |
+          python extraer_softbol.py config_softbol.json data/softbol_snapshot.json
+
+      - name: Generar portal de scouting Relámpago (Equipos A y B)
+        run: |
+          python generar_portal_softbol.py --config config_softbol.json --snapshot data/softbol_snapshot.json
+
+      - name: Publicar cambios en GitHub Pages (carpeta docs/)
+        run: |
+          git config user.name "Relampago Scouting Bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add docs/ data/softbol_snapshot.json
+          git diff --staged --quiet || git commit -m "Actualización automática Softbol Relámpago"
+          git push
