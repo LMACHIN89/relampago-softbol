@@ -4,8 +4,14 @@ on:
   # Se ejecuta automáticamente todos los lunes a las 7:00 AM hora de Caracas (11:00 UTC)
   schedule:
     - cron: '0 11 * * 1'
-  # Permite ejecutarlo manualmente con un clic desde la pestaña "Actions"
+  # Permite ejecutarlo manualmente con opción de solo regenerar la web sin re-descargar la liga
   workflow_dispatch:
+    inputs:
+      solo_regenerar:
+        description: 'Solo regenerar la web (sin descargar de BeisbolySoftbol.com)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -24,6 +30,7 @@ jobs:
           python-version: '3.11'
 
       - name: Extraer datos actualizados de BeisbolySoftbol.com (UNIMET)
+        if: ${{ inputs.solo_regenerar != true }}
         run: |
           python extraer_softbol.py config_softbol.json data/softbol_snapshot.json
 
