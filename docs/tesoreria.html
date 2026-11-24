@@ -133,12 +133,14 @@
 </head>
 <body>
   <div class="wrap" id="app"></div>
+  <script src="tesoreria_config.js"></script>
   <script>
     // =========================================================================
     // CONFIGURACIÓN ÚNICA — PEGA AQUÍ TU URL DE GOOGLE APPS SCRIPT (/exec)
+    // (También puedes configurarla en config_softbol.json -> "tesoreria_url")
     // =========================================================================
-    const DEFAULT_APPS_SCRIPT_URL = ""; // Ej: "https://script.google.com/macros/s/AKfycbz-uwApAgvsNi29gRP7gRgqu0aoHSxu2N3xNREiKTbKhQEnf_BrfcRBd54Cvpx5NpCT/exec"
-    const WHATSAPP_TESORERO = "";       // Opcional: Ej. "584242565925" (sin + ni espacios)
+    const DEFAULT_APPS_SCRIPT_URL = ""; // Ej: "https://script.google.com/macros/s/AKfycb.../exec"
+    const WHATSAPP_TESORERO = "";       // Opcional: Ej. "584123828202" (sin + ni espacios)
 
     (function initTesoreria() {
       const root = document.getElementById("app");
@@ -148,8 +150,12 @@
 
       const LS_URL = "relampago_tesoreria_url_v1";
       const LS_KEY = "relampago_tesoreria_key_v1";
+      const CFG_EXT = (window.TESORERIA_CONFIG || {});
+      const FIXED_API_URL = (DEFAULT_APPS_SCRIPT_URL || CFG_EXT.api_url || "").trim();
+      const FIXED_WA = (WHATSAPP_TESORERO || CFG_EXT.whatsapp_tesorero || "").trim();
 
-      let apiUrl = DEFAULT_APPS_SCRIPT_URL || localStorage.getItem(LS_URL) || "";
+      let apiUrl = FIXED_API_URL || localStorage.getItem(LS_URL) || "";
+      let showInactive = false;
       let accessKey = localStorage.getItem(LS_KEY) || "";
       let adminPin = "";
 
@@ -191,6 +197,7 @@
               equipo: jugObj ? jugObj.equipo : "A",
               numero: jugObj ? jugObj.numero : "",
               telefono: jugObj ? jugObj.telefono : "",
+              activo: jugObj ? (norm(jugObj.estado || "activo") !== "inactivo" && norm(jugObj.estado || "activo") !== "baja") : true,
               cargosList: [],
               pagosList: [],
               totalCargos: 0,
@@ -232,7 +239,11 @@
           return r;
         });
 
-        const filtered = allRows.filter(r => matchesSquad(r.equipo, squadFilter));
+        const filtered = allRows.filter(r => {
+          if (!matchesSquad(r.equipo, squadFilter)) return false;
+          if (!showInactive && !r.activo && Math.abs(r.saldo) <= 0.05 && r.totalPendiente === 0) return false;
+          return true;
+        });
         filtered.sort((a, b) => a.saldo - b.saldo || a.nombre.localeCompare(b.nombre));
 
         const kpis = {
@@ -257,7 +268,7 @@
           state = data;
           apiUrl = urlToUse;
           accessKey = keyToUse;
-          if (!DEFAULT_APPS_SCRIPT_URL) localStorage.setItem(LS_URL, apiUrl);
+          if (!FIXED_API_URL) localStorage.setItem(LS_URL, apiUrl);
           localStorage.setItem(LS_KEY, accessKey);
           if (data.is_admin) adminPin = keyToUse;
           flash = null;
@@ -303,7 +314,7 @@
             <p>Acceso privado de <strong>Relámpago del Caribe</strong> para proteger los saldos, teléfonos y cédulas de los jugadores.</p>
             ${flash ? `<div class="alert alert-${flash.type}">${esc(flash.msg)}</div>` : ""}
             <form id="login-form" style="text-align:left;display:flex;flex-direction:column;gap:12px">
-              ${!DEFAULT_APPS_SCRIPT_URL ? `
+              ${!FIXED_API_URL ? `
                 <div>
                   <label class="fl">🔗 URL de Google Apps Script (/exec)</label>
                   <input class="inp" id="in-url" type="url" required value="${esc(apiUrl)}" placeholder="https://script.google.com/macros/s/.../exec" />
@@ -321,7 +332,7 @@
         `;
         document.getElementById("login-form").addEventListener("submit", (e) => {
           e.preventDefault();
-          const u = DEFAULT_APPS_SCRIPT_URL || document.getElementById("in-url").value.trim();
+          const u = FIXED_API_URL || document.getElementById("in-url").value.trim();
           const k = document.getElementById("in-key").value.trim();
           if (u && k) fetchData(u, k);
         });
@@ -337,7 +348,8 @@
         const k = ledger.kpis;
         const q = searchQ.trim().toLowerCase();
         const visibleSaldos = q ? ledger.rows.filter(r => [r.nombre, r.equipo, r.estado, r.numero].join(" ").toLowerCase().includes(q)) : ledger.rows;
-        const allJugadores = (state.jugadores || []).filter(j => matchesSquad(j.equipo, squadFilter));
+        const isActiveJ = (j) => { const e = norm(j.estado || "activo"); return e !== "inactivo" && e !== "baja"; };
+        const allJugadores = (state.jugadores || []).filter(j => matchesSquad(j.equipo, squadFilter) && (showInactive || isActiveJ(j)));
         const visibleFicha = q ? allJugadores.filter(j => [j.nombre, j.cedula, j.numero, j.telefono, j.equipo, j.pos1].join(" ").toLowerCase().includes(q)) : allJugadores;
         const isAdminUnlocked = Boolean(adminPin);
 
@@ -377,7 +389,7 @@
                       const isExp = expandedPlayer === r.nombre;
                       return `
                         <tr class="click-row" data-exp="${esc(r.nombre)}">
-                          <td><strong>${esc(r.nombre)}</strong> <span style="font-size:11px;color:var(--light)">${isExp ? "▲" : "▼"}</span></td>
+                          <td><strong>${esc(r.nombre)}</strong>${!r.activo ? ' <span class="badge b-pend">Baja</span>' : ''} <span style="font-size:11px;color:var(--light)">${isExp ? "▲" : "▼"}</span></td>
                           <td class="center"><span class="badge b-gold">${esc(r.equipo)}</span></td>
                           <td class="center" style="font-family:var(--mono)">${esc(r.numero || "—")}</td>
                           <td class="center"><span class="badge ${bCls}">${esc(r.estado)}</span></td>
@@ -421,7 +433,11 @@
 
         // ======================= TAB 2: REPORTAR PAGO (JUGADORES) =======================
         else if (activeTab === "reportar") {
-          const allNames = (state.jugadores || []).map(j => j.nombre).sort((a,b) => a.localeCompare(b));
+          const allNames = (state.jugadores || []).filter(j => {
+            if (isActiveJ(j)) return true;
+            const row = ledger.allRows.find(r => r.nombre === j.nombre);
+            return row && row.saldo < -0.05;
+          }).map(j => j.nombre).sort((a,b) => a.localeCompare(b));
           tabContent = `
             <section class="card" style="max-width:740px;margin:0 auto 18px">
               <h2>🧾 Reportar un Pago</h2>
@@ -512,6 +528,7 @@
                 </div>
                 <div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
                   <input class="inp" id="search-box" style="width:200px" value="${esc(searchQ)}" placeholder="Buscar nombre, CI o #..." />
+                  <label style="font-size:12px;font-weight:700;color:var(--muted);display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="chk-show-inact" ${showInactive ? "checked" : ""} /> Ver bajas</label>
                   <button class="btn" id="btn-ficha-mode">${fichaViewMode === "cards" ? "📋 Ver como Tabla" : "🪪 Ver como Fichas"}</button>
                   <button class="btn btn-navy" onclick="window.print()">🖨️ Imprimir Roster</button>
                 </div>
@@ -591,7 +608,8 @@
               </section>
             `;
           } else {
-            const allJ = (state.jugadores || []).slice().sort((a,b) => a.nombre.localeCompare(b.nombre));
+            const allJAll = (state.jugadores || []).slice().sort((a,b) => a.nombre.localeCompare(b.nombre));
+            const allJ = allJAll.filter(isActiveJ);
             const nSel = selectedForExpense.size;
             const mNum = parseFloat(expenseMonto) || 0;
             const previewPerPlayer = nSel > 0 && mNum > 0
@@ -739,22 +757,28 @@
                 <h2>🪪 Agregar o Editar Ficha de Jugador</h2>
                 <div class="sub">Selecciona un jugador existente para actualizar su Equipo (A/B), Cédula, Teléfono o # de Camiseta, o crea uno nuevo.</div>
                 <div style="margin-bottom:12px">
-                  <select class="sel" id="ed-pick-jug" style="max-width:340px">
+                  <select class="sel" id="ed-pick-jug" style="max-width:380px">
                     <option value="__NEW__">➕ Crear Jugador Nuevo</option>
-                    ${allJ.map(j => `<option value="${esc(j.id)}" ${editingPlayer && editingPlayer.id === j.id ? "selected" : ""}>${esc(j.nombre)} (Eq. ${esc(j.equipo)} · #${esc(j.numero || "—")})</option>`).join("")}
+                    ${allJAll.map(j => `<option value="${esc(j.id)}" ${editingPlayer && editingPlayer.id === j.id ? "selected" : ""}>${esc(j.nombre)} (Eq. ${esc(j.equipo)} · #${esc(j.numero || "—")})${!isActiveJ(j) ? " [BAJA]" : ""}</option>`).join("")}
                   </select>
                 </div>
                 <form id="player-form" class="form-grid-3">
                   <div><label class="fl">Nombre y Apellido *</label><input class="inp" id="jp-nom" required value="${esc(editingPlayer?.nombre || "")}" /></div>
                   <div><label class="fl">Equipo *</label><select class="sel" id="jp-eq"><option value="A" ${(editingPlayer?.equipo||"A")==="A"?"selected":""}>A</option><option value="B" ${editingPlayer?.equipo==="B"?"selected":""}>B</option><option value="A y B" ${editingPlayer?.equipo==="A y B"?"selected":""}>A y B</option></select></div>
+                  <div><label class="fl">Estado en el Equipo</label><select class="sel" id="jp-est"><option value="Activo" ${(editingPlayer?.estado||"Activo")==="Activo"?"selected":""}>Activo</option><option value="Inactivo" ${editingPlayer?.estado==="Inactivo"?"selected":""}>Inactivo (Dado de baja)</option></select></div>
                   <div><label class="fl">Cédula</label><input class="inp" id="jp-ci" value="${esc(editingPlayer?.cedula || "")}" placeholder="Ej: 18836968" /></div>
                   <div><label class="fl">Fecha de Nacimiento</label><input class="inp" id="jp-dob" type="date" value="${esc(editingPlayer?.fecha_nac || "")}" /></div>
                   <div><label class="fl"># Camiseta</label><input class="inp" id="jp-num" value="${esc(editingPlayer?.numero || "")}" placeholder="Ej: 3" /></div>
                   <div><label class="fl">Teléfono Celular</label><input class="inp" id="jp-tel" value="${esc(editingPlayer?.telefono || "")}" placeholder="0412-000-0000" /></div>
-                  <div><label class="fl">Batea (D/Z/A)</label><input class="inp" id="jp-bat" value="${esc(editingPlayer?.batea || "D")}" /></div>
-                  <div><label class="fl">Lanza (D/Z)</label><input class="inp" id="jp-lan" value="${esc(editingPlayer?.lanza || "D")}" /></div>
+                  <div><label class="fl">Batea / Lanza</label><div style="display:flex;gap:6px"><input class="inp" id="jp-bat" value="${esc(editingPlayer?.batea || "D")}" placeholder="D" /><input class="inp" id="jp-lan" value="${esc(editingPlayer?.lanza || "D")}" placeholder="D" /></div></div>
                   <div><label class="fl">Posición 1 / 2</label><div style="display:flex;gap:6px"><input class="inp" id="jp-p1" value="${esc(editingPlayer?.pos1 || "")}" placeholder="2B" /><input class="inp" id="jp-p2" value="${esc(editingPlayer?.pos2 || "")}" placeholder="SS" /></div></div>
-                  <div class="full" style="display:flex;justify-content:flex-end">
+                  <div class="full" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                      ${editingPlayer ? `
+                        <button type="button" class="btn" id="btn-baja-jug" style="border-color:#eab308;color:#854d0e;background:#fef9c3">🚫 Dar de Baja (mantener historial)</button>
+                        <button type="button" class="btn btn-red" id="btn-del-jug">🗑️ Eliminar del Roster</button>
+                      ` : ""}
+                    </div>
                     <button class="btn btn-navy" type="submit">💾 Guardar Ficha del Jugador</button>
                   </div>
                 </form>
@@ -893,7 +917,7 @@
             });
             if (res) {
               const waText = encodeURIComponent(`⚡ Reporte de Pago Relámpago (${res.id_pago})\nJugador: ${jug}\nMonto: $${usd.toFixed(2)}\nMétodo: ${met}\nRef: ${ref || "N/A"}\nConcepto: ${conc}`);
-              const waUrl = WHATSAPP_TESORERO ? `https://wa.me/${WHATSAPP_TESORERO}?text=${waText}` : `https://wa.me/?text=${waText}`;
+              const waUrl = FIXED_WA ? `https://wa.me/${FIXED_WA}?text=${waText}` : `https://wa.me/?text=${waText}`;
               flash = { type: "ok", msg: res.message, waUrl };
               activeTab = "saldos";
               render();
@@ -904,6 +928,8 @@
         // Tab 3 listeners (Ficha)
         const fmBtn = document.getElementById("btn-ficha-mode");
         if (fmBtn) fmBtn.addEventListener("click", () => { fichaViewMode = fichaViewMode === "cards" ? "table" : "cards"; render(); });
+        const chkIn = document.getElementById("chk-show-inact");
+        if (chkIn) chkIn.addEventListener("change", (e) => { showInactive = e.target.checked; render(); });
 
         // Tab 4 listeners (Admin)
         const unlockForm = document.getElementById("admin-unlock-form");
@@ -933,15 +959,15 @@
           document.getElementById("ex-notas").addEventListener("input", e => { expenseNotas = e.target.value; });
 
           document.getElementById("ex-sel-a").addEventListener("click", () => {
-            selectedForExpense = new Set((state.jugadores||[]).filter(j => matchesSquad(j.equipo, "A")).map(j => j.nombre));
+            selectedForExpense = new Set((state.jugadores||[]).filter(j => isActiveJ(j) && matchesSquad(j.equipo, "A")).map(j => j.nombre));
             render();
           });
           document.getElementById("ex-sel-b").addEventListener("click", () => {
-            selectedForExpense = new Set((state.jugadores||[]).filter(j => matchesSquad(j.equipo, "B")).map(j => j.nombre));
+            selectedForExpense = new Set((state.jugadores||[]).filter(j => isActiveJ(j) && matchesSquad(j.equipo, "B")).map(j => j.nombre));
             render();
           });
           document.getElementById("ex-sel-all").addEventListener("click", () => {
-            selectedForExpense = new Set((state.jugadores||[]).map(j => j.nombre));
+            selectedForExpense = new Set((state.jugadores||[]).filter(isActiveJ).map(j => j.nombre));
             render();
           });
           document.getElementById("ex-sel-none").addEventListener("click", () => { selectedForExpense.clear(); render(); });
@@ -1017,8 +1043,24 @@
               pos1: document.getElementById("jp-p1").value.trim(),
               pos2: document.getElementById("jp-p2").value.trim(),
               es_pitcher: editingPlayer ? editingPlayer.es_pitcher : "NO",
-              estado: "Activo",
+              estado: document.getElementById("jp-est").value,
             });
+            if (res) { editingPlayer = null; flash = { type: "ok", msg: res.message }; render(); }
+          });
+        }
+        const btnBaja = document.getElementById("btn-baja-jug");
+        if (btnBaja && editingPlayer) {
+          btnBaja.addEventListener("click", async () => {
+            if (!confirm(`¿Dar de baja a ${editingPlayer.nombre}? Dejará de aparecer en fichas activas y nuevos gastos, pero conservará su historial de pagos.`)) return;
+            const res = await postAction({ action: "eliminar_jugador", id: editingPlayer.id, nombre: editingPlayer.nombre, modo: "baja" });
+            if (res) { editingPlayer = null; flash = { type: "ok", msg: res.message }; render(); }
+          });
+        }
+        const btnDel = document.getElementById("btn-del-jug");
+        if (btnDel && editingPlayer) {
+          btnDel.addEventListener("click", async () => {
+            if (!confirm(`¿ELIMINAR definitivamente a ${editingPlayer.nombre} de la hoja Jugadores?`)) return;
+            const res = await postAction({ action: "eliminar_jugador", id: editingPlayer.id, nombre: editingPlayer.nombre, modo: "eliminar" });
             if (res) { editingPlayer = null; flash = { type: "ok", msg: res.message }; render(); }
           });
         }
