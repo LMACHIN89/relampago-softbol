@@ -1,8 +1,10 @@
 name: relampago-softbol
 
 on:
+  # Se ejecuta automáticamente todos los lunes a las 7:00 AM hora de Caracas (11:00 UTC)
   schedule:
     - cron: '0 11 * * 1'
+  # Permite ejecutarlo manualmente con opción de solo regenerar la web sin re-descargar la liga
   workflow_dispatch:
     inputs:
       solo_regenerar:
@@ -13,10 +15,6 @@ on:
 
 permissions:
   contents: write
-
-concurrency:
-  group: actualizar-softbol
-  cancel-in-progress: false
 
 jobs:
   actualizar-softbol:
@@ -46,5 +44,4 @@ jobs:
           git config user.email "bot@users.noreply.github.com"
           git add docs/ data/softbol_snapshot.json
           git diff --staged --quiet || git commit -m "Actualización automática Softbol Relámpago"
-          git pull --rebase -X theirs origin main
           git push
