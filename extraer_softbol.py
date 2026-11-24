@@ -199,6 +199,22 @@ class NestedTableAndLinkParser(HTMLParser):
             self._table_stack[-1]["cur_cell"]["text_parts"].append(data)
 
 
+
+def inspect_empty_html(html_str: str) -> str:
+    """Extrae texto visible del <body> y posibles endpoints AJAX/iframe para diagnóstico."""
+    if not html_str:
+        return "HTML vacío (0 bytes)"
+    body_m = re.search(r"<body[^>]*>(.*?)</body>", html_str, re.IGNORECASE | re.DOTALL)
+    chunk = body_m.group(1) if body_m else html_str
+    # Buscar posibles llamadas AJAX / .load / iframe / window.location dentro de scripts
+    ajax_hits = re.findall(r"""(?:url\s*:\s*|load\s*\(\s*|src\s*=\s*|href\s*=\s*|location(?:\.href)?\s*=\s*)['"]([^'"]+\.php[^'"]*)['"]""", chunk, re.IGNORECASE)
+    ajax_hits = [u for u in dict.fromkeys(ajax_hits) if any(k in u.lower() for k in ("est", "ofe", "pic", "def", "ajax", "tab", "data", "jug", "equ", "login", "suscrip"))]
+    # Texto visible sin scripts/styles
+    no_js = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", chunk, flags=re.IGNORECASE | re.DOTALL)
+    vis = clean_cell(re.sub(r"<[^>]+>", " ", no_js))
+    return f"body_text='{vis[:320]}' | php_refs={ajax_hits[:6]}"
+
+
 def parse_page(html_str: str) -> NestedTableAndLinkParser:
     p = NestedTableAndLinkParser()
     p.feed(html_str or "")
@@ -354,7 +370,8 @@ def discover_tournaments(league_html: str, cfg: Dict[str, Any]) -> List[Dict[str
             cid = extract_query_param(href, "cam")
             if not cid or cid in cams:
                 continue
-            name = clean_cell(txt) or f"Campeonato {cid}"
+            raw_name = clean_cell(txt) or f"Campeonato {cid}"
+            name = re.sub(r"^[^A-Za-z0-9ÁÉÍÓÚÑáéíóúñ]+", "", raw_name).strip() or raw_name
             m_num = re.search(r"torneo\s*(\d+)", norm_text(name))
             t_num = int(m_num.group(1)) if m_num else 0
             if t_num and t_num < min_num:
@@ -666,12 +683,21 @@ def parse_team_defense(html_str: str, debug_tag: str = "") -> List[Dict[str, Any
     return fielders
 
 
-def parse_player_detail(html_str: str) -> Dict[str, Any]:
-    """Extrae defensiva POR POSICIÓN (`AL CAMPO`), pitcheo (si lanzó) y juego-a-juego desde jugador.php."""
+def parse_player_detail(html_str: str, tournament_name: str = "", tournament_num: int = 0) -> Dict[str, Any]:
+    """
+    Extrae desde jugador.php:
+      1. Defensiva POR POSICIÓN (`AL CAMPO`)
+      2. Pitcheo individual (si lanzó) — sumando juego a juego para evitar desfase por colspan
+      3. Bateo completo del torneo (desde `Registro Historico Personal` filtrando el campeonato actual
+         y/o sumando `Numeros Juego a Juego`)
+    """
     p = parse_page(html_str)
     positions: List[Dict[str, Any]] = []
     game_log: List[Dict[str, Any]] = []
     pitching_summary: Optional[Dict[str, Any]] = None
+    batting_from_hist: Optional[Dict[str, Any]] = None
+    t_norm = norm_text(tournament_name)
+    t_num_pat = f"torneo {tournament_num}" if tournament_num else ""
 
     for tbl in p.tables:
         rows = tbl["rows"]
@@ -688,7 +714,7 @@ def parse_player_detail(html_str: str) -> Dict[str, Any]:
                     continue
                 jj = to_int(col_val(r, headers_def, "jj", "j"))
                 po = to_int(col_val(r, headers_def, "po"))
-                asist = to_int(col_val(r, headers_def, "as"))
+                asist = to_int(col_val(r, headers_def, "as", "a"))
                 err = to_int(col_val(r, headers_def, "e"))
                 dp = to_int(col_val(r, headers_def, "dp"))
                 ej = round(parse_innings(to_float(col_val(r, headers_def, "ej", "ij", "il", "ip"))), 2)
@@ -700,42 +726,92 @@ def parse_player_detail(html_str: str) -> Dict[str, Any]:
                 })
             continue
 
-        # 2. Tabla de Pitcheo individual (si el jugador lanzó)
-        h_pic, headers_pic = find_header_row(rows, ("efe", "era", "il", "el", "cl", "bb", "k"), min_hits=4)
-        if h_pic >= 0 and "vb" not in headers_pic and "al campo" not in headers_pic:
-            # Buscar fila de Totales o sumar juego a juego
-            tot_row = None
+        # 2. Tabla de Pitcheo individual (permite VB; excluye SLG/OPS/AL CAMPO/CAMPEONATO)
+        h_pic, headers_pic = find_header_row(rows, ("efe", "era", "ip", "il", "el", "cl", "cp", "hp", "whip"), min_hits=4)
+        if h_pic >= 0 and "slg" not in headers_pic and "ops" not in headers_pic and "al campo" not in headers_pic and "campeonato" not in headers_pic:
+            pic_games = []
             for r in rows[h_pic + 1:]:
+                if len(r) < 6:
+                    continue
                 if any("total" in norm_text(c["text"]) for c in r[:3]):
-                    tot_row = r
-                    break
-            if tot_row and len(tot_row) >= 5:
-                ip_raw = to_float(col_val(tot_row, headers_pic, "il", "el", "ip", "inn"))
+                    continue
+                ip_raw = to_float(col_val(r, headers_pic, "ip", "il", "el", "inn"))
                 ip_real = parse_innings(ip_raw)
-                h = to_int(col_val(tot_row, headers_pic, "h", "hc", "hp"))
-                cl = to_int(col_val(tot_row, headers_pic, "cl", "er"))
-                ca = to_int(col_val(tot_row, headers_pic, "cp", "ca", "c"))
-                bb = to_int(col_val(tot_row, headers_pic, "bb"))
-                k = to_int(col_val(tot_row, headers_pic, "k", "so"))
-                hr = to_int(col_val(tot_row, headers_pic, "hr"))
-                g = to_int(col_val(tot_row, headers_pic, "jg", "g"))
-                pr = to_int(col_val(tot_row, headers_pic, "jp", "p"))
-                efe_pub = to_float(col_val(tot_row, headers_pic, "efe", "era"))
-                efe = round(efe_pub, 2) if efe_pub > 0 else (round(cl * 7.0 / ip_real, 2) if ip_real > 0 else 0.0)
-                whip = round((h + bb) / ip_real, 2) if ip_real > 0 else 0.0
-                if ip_real > 0:
-                    pitching_summary = {
-                        "jj": max(1, len(rows) - h_pic - 2), "ji": 0, "g": g, "p": pr, "s": 0,
-                        "ip": ip_raw, "ip_real": round(ip_real, 2),
-                        "h": h, "ca": ca, "cl": cl, "bb": bb, "k": k, "hr": hr, "efe": efe, "whip": whip,
+                h = to_int(col_val(r, headers_pic, "hp", "h", "hc"))
+                cl = to_int(col_val(r, headers_pic, "cl", "er"))
+                ca = to_int(col_val(r, headers_pic, "cp", "ca", "c"))
+                bb = to_int(col_val(r, headers_pic, "bb"))
+                k = to_int(col_val(r, headers_pic, "k", "so"))
+                hr = to_int(col_val(r, headers_pic, "hr"))
+                g = to_int(col_val(r, headers_pic, "jg", "g"))
+                pr = to_int(col_val(r, headers_pic, "jp", "p"))
+                if ip_real > 0 or h > 0 or bb > 0 or g > 0 or pr > 0:
+                    pic_games.append({"ip_real": ip_real, "h": h, "cl": cl, "ca": ca, "bb": bb, "k": k, "hr": hr, "g": g, "p": pr})
+            if pic_games:
+                ip_tot = round(sum(x["ip_real"] for x in pic_games), 2)
+                h_tot = sum(x["h"] for x in pic_games)
+                cl_tot = sum(x["cl"] for x in pic_games)
+                ca_tot = sum(x["ca"] for x in pic_games)
+                bb_tot = sum(x["bb"] for x in pic_games)
+                k_tot = sum(x["k"] for x in pic_games)
+                hr_tot = sum(x["hr"] for x in pic_games)
+                g_tot = sum(x["g"] for x in pic_games)
+                p_tot = sum(x["p"] for x in pic_games)
+                efe = round(cl_tot * 7.0 / ip_tot, 2) if ip_tot > 0 else 0.0
+                whip = round((h_tot + bb_tot) / ip_tot, 2) if ip_tot > 0 else 0.0
+                pitching_summary = {
+                    "jj": len(pic_games), "ji": 0, "g": g_tot, "p": p_tot, "s": 0,
+                    "ip": ip_tot, "ip_real": ip_tot,
+                    "h": h_tot, "ca": ca_tot, "cl": cl_tot, "bb": bb_tot, "k": k_tot, "hr": hr_tot,
+                    "efe": efe, "whip": whip,
+                }
+            continue
+
+        # 3. Registro Historico Personal: Campeonato | Equipo | JJ | VB | CA | HC | BB | SH | SF | GP | AL | H2 | H3 | HR | CI | BR | K | AVG
+        h_hist, headers_hist = find_header_row(rows, ("campeonato", "equipo", "vb", "hc"), min_hits=3)
+        if h_hist >= 0 and "campeonato" in headers_hist and "vb" in headers_hist:
+            for r in rows[h_hist + 1:]:
+                if len(r) < 8:
+                    continue
+                camp_txt = norm_text(col_val(r, headers_hist, "campeonato"))
+                if not camp_txt:
+                    continue
+                matches_t = (t_num_pat and t_num_pat in camp_txt) or (t_norm and t_norm in camp_txt)
+                if not matches_t:
+                    continue
+                jj = to_int(col_val(r, headers_hist, "jj", "j"))
+                vb = to_int(col_val(r, headers_hist, "vb"))
+                ca = to_int(col_val(r, headers_hist, "ca"))
+                h = to_int(col_val(r, headers_hist, "hc", "h"))
+                h2 = to_int(col_val(r, headers_hist, "h2"))
+                h3 = to_int(col_val(r, headers_hist, "h3"))
+                hr = to_int(col_val(r, headers_hist, "hr"))
+                ci = to_int(col_val(r, headers_hist, "ci"))
+                bb = to_int(col_val(r, headers_hist, "bb"))
+                k = to_int(col_val(r, headers_hist, "k"))
+                br = to_int(col_val(r, headers_hist, "br"))
+                sf = to_int(col_val(r, headers_hist, "sf"))
+                gp = to_int(col_val(r, headers_hist, "gp"))
+                al = to_int(col_val(r, headers_hist, "al"))
+                denom_obp = max(al, vb + bb + gp + sf)
+                avg = round(h / vb, 3) if vb > 0 else 0.0
+                obp = round((h + bb + gp) / denom_obp, 3) if denom_obp > 0 else 0.0
+                tb = h + h2 + 2 * h3 + 3 * hr
+                slg = round(tb / vb, 3) if vb > 0 else 0.0
+                ops = round(obp + slg, 3)
+                if vb > 0 or al > 0 or jj > 0:
+                    batting_from_hist = {
+                        "jj": jj, "vb": vb, "al": denom_obp, "ca": ca, "h": h, "h2": h2, "h3": h3,
+                        "hr": hr, "ci": ci, "bb": bb, "k": k, "br": br, "sf": sf, "gp": gp,
+                        "avg": avg, "obp": obp, "slg": slg, "ops": ops,
                     }
             continue
 
-        # 3. Tabla Juego a Juego ofensivo
-        h_log, headers_log = find_header_row(rows, ("dia", "vs", "vb"), min_hits=2)
-        if h_log >= 0 and "vb" in headers_log:
+        # 4. Tabla Juego a Juego ofensivo: NJ | Dia | Vs | VB | H | H2 | H3 | HR | CI | CA | BB | K | AL | PDE | SLG | AVG | OPS
+        h_log, headers_log = find_header_row(rows, ("dia", "vs", "vb"), min_hits=3)
+        if h_log >= 0 and "vb" in headers_log and "slg" in headers_log:
             for r in rows[h_log + 1:]:
-                if len(r) < 6:
+                if len(r) < 8:
                     continue
                 if "total" in norm_text(r[0]["text"]) or "total" in norm_text(r[1]["text"]):
                     continue
@@ -752,9 +828,124 @@ def parse_player_detail(html_str: str) -> Dict[str, Any]:
                     "ca": to_int(col_val(r, headers_log, "ca")),
                     "bb": to_int(col_val(r, headers_log, "bb")),
                     "k": to_int(col_val(r, headers_log, "k")),
+                    "al": to_int(col_val(r, headers_log, "al")),
                 })
 
-    return {"positions": positions, "game_log": game_log, "pitching_backup": pitching_summary}
+    # Construir batting_backup combinando Registro Historico (preferido porque trae SF/GP/BR) o suma de game_log
+    batting_backup = batting_from_hist
+    if not batting_backup and game_log:
+        jj = len(game_log)
+        vb = sum(g["vb"] for g in game_log)
+        h = sum(g["h"] for g in game_log)
+        h2 = sum(g["h2"] for g in game_log)
+        h3 = sum(g["h3"] for g in game_log)
+        hr = sum(g["hr"] for g in game_log)
+        ci = sum(g["ci"] for g in game_log)
+        ca = sum(g["ca"] for g in game_log)
+        bb = sum(g["bb"] for g in game_log)
+        k = sum(g["k"] for g in game_log)
+        al = sum(g.get("al", 0) for g in game_log)
+        denom_obp = max(al, vb + bb)
+        avg = round(h / vb, 3) if vb > 0 else 0.0
+        obp = round((h + bb) / denom_obp, 3) if denom_obp > 0 else 0.0
+        tb = h + h2 + 2 * h3 + 3 * hr
+        slg = round(tb / vb, 3) if vb > 0 else 0.0
+        ops = round(obp + slg, 3)
+        batting_backup = {
+            "jj": jj, "vb": vb, "al": denom_obp, "ca": ca, "h": h, "h2": h2, "h3": h3,
+            "hr": hr, "ci": ci, "bb": bb, "k": k, "br": 0, "sf": 0, "gp": 0,
+            "avg": avg, "obp": obp, "slg": slg, "ops": ops,
+        }
+
+    return {
+        "positions": positions,
+        "game_log": game_log,
+        "batting_backup": batting_backup,
+        "pitching_backup": pitching_summary,
+    }
+
+
+def parse_lideres_table(html_str: str, mode: str) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Respaldo para equipos rivales desde `lideresV1.php?lig=174&cam=...&dep=AVE` (bateo)
+    o `dep=EFE` (pitcheo), agrupado por nombre de equipo normalizado.
+    """
+    p = parse_page(html_str)
+    by_team: Dict[str, List[Dict[str, Any]]] = {}
+    for tbl in p.tables:
+        rows = tbl["rows"]
+        if mode == "bat":
+            h_idx, headers = find_header_row(rows, ("vb", "avg", "h", "equipo"), min_hits=3)
+            if h_idx < 0 or "vb" not in headers:
+                continue
+        else:
+            h_idx, headers = find_header_row(rows, ("efe", "ip", "il", "equipo"), min_hits=3)
+            if h_idx < 0:
+                continue
+
+        for r in rows[h_idx + 1:]:
+            if len(r) < 5:
+                continue
+            name, jug_id = extract_row_player(r)
+            if is_junk_player_name(name):
+                continue
+            tname = col_val(r, headers, "equipo", "eq")
+            if not tname:
+                for c in r[:5]:
+                    for href, ltxt in c["links"]:
+                        if "equipo.php" in href.lower() and ltxt:
+                            tname = ltxt
+                            break
+            if not tname:
+                continue
+            tk = norm_text(tname)
+            if mode == "bat":
+                vb = to_int(col_val(r, headers, "vb", "ab"))
+                h = to_int(col_val(r, headers, "h", "hc"))
+                h2 = to_int(col_val(r, headers, "h2", "2b"))
+                h3 = to_int(col_val(r, headers, "h3", "3b"))
+                hr = to_int(col_val(r, headers, "hr"))
+                ci = to_int(col_val(r, headers, "ci"))
+                ca = to_int(col_val(r, headers, "ca"))
+                bb = to_int(col_val(r, headers, "bb"))
+                k = to_int(col_val(r, headers, "k"))
+                jj = to_int(col_val(r, headers, "jj", "j"))
+                al = to_int(col_val(r, headers, "al"))
+                denom = max(al, vb + bb)
+                avg = round(h / vb, 3) if vb > 0 else parse_baseball_rate(col_val(r, headers, "avg", "ave"))
+                obp = round((h + bb) / denom, 3) if denom > 0 else parse_baseball_rate(col_val(r, headers, "pde", "obp"))
+                tb = h + h2 + 2 * h3 + 3 * hr
+                slg = round(tb / vb, 3) if vb > 0 else parse_baseball_rate(col_val(r, headers, "slg"), allow_above_one=True)
+                by_team.setdefault(tk, []).append({
+                    "jug_id": jug_id, "name": name, "jj": jj, "vb": vb, "al": denom,
+                    "ca": ca, "h": h, "h2": h2, "h3": h3, "hr": hr, "ci": ci,
+                    "bb": bb, "k": k, "br": 0, "sf": 0, "gp": 0,
+                    "avg": avg, "obp": obp, "slg": slg, "ops": round(obp + slg, 3),
+                })
+            else:
+                ip_raw = to_float(col_val(r, headers, "ip", "il", "el"))
+                ip_real = parse_innings(ip_raw)
+                g = to_int(col_val(r, headers, "g", "jg"))
+                pr = to_int(col_val(r, headers, "p", "jp"))
+                h = to_int(col_val(r, headers, "hp", "h", "hc"))
+                cl = to_int(col_val(r, headers, "cl", "er"))
+                ca = to_int(col_val(r, headers, "cp", "ca"))
+                bb = to_int(col_val(r, headers, "bb"))
+                k = to_int(col_val(r, headers, "k"))
+                hr = to_int(col_val(r, headers, "hr"))
+                efe_str = col_val(r, headers, "efe", "era")
+                efe = round(to_float(efe_str), 2) if efe_str.strip() else (round(cl * 7.0 / ip_real, 2) if ip_real > 0 else 0.0)
+                whip = round((h + bb) / ip_real, 2) if ip_real > 0 else to_float(col_val(r, headers, "whip"))
+                if ip_real > 0 or g > 0 or pr > 0:
+                    by_team.setdefault(tk, []).append({
+                        "jug_id": jug_id, "name": name, "jj": max(g + pr, 1), "ji": 0,
+                        "g": g, "p": pr, "s": 0, "ip": ip_raw, "ip_real": round(ip_real, 2),
+                        "h": h, "ca": ca, "cl": cl, "bb": bb, "k": k, "hr": hr,
+                        "efe": efe, "whip": whip,
+                    })
+        if by_team:
+            break
+    return by_team
 
 
 # ==============================================================================
@@ -824,45 +1015,48 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
         teams_data: Dict[str, Dict[str, Any]] = {}
         relampago_player_ids: Dict[str, str] = {}
         relampago_roster_names: List[Dict[str, str]] = []
-        cam_name_q = urllib.parse.quote(c_info["name"])
+        our_tname = ""
+        printed_body_diag = False
 
         for equ_id, t_meta in teams_map.items():
             tname = t_meta["name"]
             is_ours = our_kw in norm_text(tname)
+            if is_ours:
+                our_tname = tname
             dbg = f"{tname} T{c_info['number']}" if is_ours else ""
             eq_ref = f"{BASE_SITE}equipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}"
 
-            # 1) Pausa cortés para evitar bloqueos/rate-limit de beisbolysoftbol.com
-            ofe_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=ofe&{cam_name_q}", referer=eq_ref)
-            time.sleep(0.25)
-            pic_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=pic&{cam_name_q}", referer=eq_ref)
-            time.sleep(0.25)
-            def_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=def&{cam_name_q}", referer=eq_ref)
-            time.sleep(0.25)
+            # Visitar equipo.php primero en nuestro equipo para iniciar sesión PHP si hace falta
+            if is_ours:
+                fetch_html(f"equipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}", referer=cam_url_full)
+                time.sleep(0.15)
+
+            ofe_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=ofe", referer=eq_ref)
+            time.sleep(0.20)
+            pic_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=pic", referer=eq_ref)
+            time.sleep(0.20)
+            def_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=def", referer=eq_ref)
+            time.sleep(0.20)
 
             batting = parse_team_batting(ofe_html)
             pitching = parse_team_pitching(pic_html, debug_tag=dbg)
             defense = parse_team_defense(def_html, debug_tag=dbg)
 
-            # Diagnóstico si Relámpago vino sin bateo pese a tener HTML
-            if is_ours and not batting and ofe_html:
-                snippet = re.sub(r"\s+", " ", ofe_html)[:260]
-                print(f"       [DEBUG {dbg} est=ofe] 0 bateadores (len={len(ofe_html)}). Inicio HTML: {snippet}")
+            # Diagnóstico real del <body> si est=ofe vino sin tabla
+            if is_ours and not batting and ofe_html and not printed_body_diag:
+                printed_body_diag = True
+                print(f"       [DIAG {dbg} est=ofe len={len(ofe_html)}] {inspect_empty_html(ofe_html)}")
 
-            # Protección anti-borrado: si vino vacío pero teníamos datos válidos previos, conservarlos
             prev_team = (prev_t.get("teams") or {}).get(tname, {})
             if not batting and prev_team.get("batting"):
                 batting = prev_team["batting"]
-                print(f"       [CACHE] Conservando bateo previo para {tname} ({len(batting)} jug.)")
             if not pitching and prev_team.get("pitching"):
                 pitching = prev_team["pitching"]
-                print(f"       [CACHE] Conservando pitcheo previo para {tname} ({len(pitching)} lanz.)")
             if not defense and prev_team.get("defense"):
                 defense = prev_team["defense"]
-                print(f"       [CACHE] Conservando defensa previa para {tname} ({len(defense)} def.)")
 
             if is_ours:
-                ros_html = fetch_html(f"roster.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&{cam_name_q}", referer=eq_ref)
+                ros_html = fetch_html(f"roster.php?equ={equ_id}&lig={lig_id}&cam={cam_id}", referer=eq_ref)
                 relampago_roster_names = parse_team_roster(ros_html)
                 if not relampago_roster_names and prev_team.get("roster"):
                     relampago_roster_names = prev_team["roster"]
@@ -873,7 +1067,7 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
                     for p in lst:
                         if p.get("jug_id"):
                             relampago_player_ids[p["jug_id"]] = p["name"]
-                print(f"       Relámpago T{c_info['number']}: roster={len(relampago_roster_names)}, bateo={len(batting)}, pitcheo={len(pitching)}, defensa={len(defense)}")
+                print(f"       Relámpago T{c_info['number']} (est): roster={len(relampago_roster_names)}, bateo={len(batting)}, pitcheo={len(pitching)}, defensa={len(defense)}")
 
             teams_data[tname] = {
                 "equ_id": equ_id, "name": tname, "is_ours": is_ours,
@@ -881,19 +1075,79 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
                 "batting": batting, "pitching": pitching, "defense": defense,
             }
 
-        # Fichas detalladas de Relámpago (posiciones AL CAMPO + backup de pitcheo)
+        # Fichas detalladas de Relámpago (posiciones AL CAMPO + respaldo COMPLETO de bateo y pitcheo)
         player_details: Dict[str, Dict[str, Any]] = dict(prev_t.get("relampago_player_details") or {})
         if relampago_player_ids:
             print(f"       Leyendo fichas individuales de {len(relampago_player_ids)} jugadores de Relámpago...")
             for jug_id, pname in relampago_player_ids.items():
                 j_html = fetch_html(f"jugador.php?jug={jug_id}&cam={cam_id}", referer=cam_url_full)
                 if j_html:
-                    det = parse_player_detail(j_html)
+                    det = parse_player_detail(j_html, tournament_name=c_info["name"], tournament_num=c_info["number"])
                     det["name"] = pname
                     det["jug_id"] = jug_id
-                    if det["positions"] or det["game_log"] or det["pitching_backup"] or jug_id not in player_details:
+                    if det["positions"] or det["game_log"] or det["batting_backup"] or det["pitching_backup"] or jug_id not in player_details:
                         player_details[jug_id] = det
-                time.sleep(0.20)
+                time.sleep(0.15)
+
+        # RECONSTRUCCIÓN AUTOMÁTICA PARA RELÁMPAGO DESDE jugador.php si estadisticasequipo.php vino vacío!
+        if our_tname and our_tname in teams_data and player_details:
+            td = teams_data[our_tname]
+            if not td["batting"]:
+                rebuilt_bat = []
+                for jid, det in player_details.items():
+                    bb = det.get("batting_backup")
+                    if bb and (bb.get("vb", 0) > 0 or bb.get("al", 0) > 0):
+                        rebuilt_bat.append({"jug_id": jid, "name": det["name"], **bb})
+                if rebuilt_bat:
+                    td["batting"] = rebuilt_bat
+                    print(f"       [BACKUP jugador.php] Bateo de Relámpago T{c_info['number']} reconstruido: {len(rebuilt_bat)} bateadores!")
+            if not td["pitching"]:
+                rebuilt_pic = []
+                for jid, det in player_details.items():
+                    pb = det.get("pitching_backup")
+                    if pb and pb.get("ip_real", 0) > 0:
+                        rebuilt_pic.append({"jug_id": jid, "name": det["name"], **pb})
+                if rebuilt_pic:
+                    td["pitching"] = rebuilt_pic
+                    print(f"       [BACKUP jugador.php] Pitcheo de Relámpago T{c_info['number']} reconstruido: {len(rebuilt_pic)} pitchers!")
+            if not td["defense"]:
+                rebuilt_def = []
+                for jid, det in player_details.items():
+                    pos_rows = det.get("positions") or []
+                    if pos_rows:
+                        jj_d = sum(x.get("jj", 0) for x in pos_rows)
+                        po_d = sum(x.get("po", 0) for x in pos_rows)
+                        as_d = sum(x.get("as", 0) for x in pos_rows)
+                        e_d = sum(x.get("e", 0) for x in pos_rows)
+                        dp_d = sum(x.get("dp", 0) for x in pos_rows)
+                        ej_d = round(sum(float(x.get("ej", 0) or 0) for x in pos_rows), 2)
+                        lt_d = po_d + as_d + e_d
+                        pdf_d = round((po_d + as_d) / lt_d, 3) if lt_d > 0 else 0.0
+                        rebuilt_def.append({
+                            "jug_id": jid, "name": det["name"], "pos": pos_rows[0]["pos"],
+                            "jj": jj_d, "po": po_d, "as": as_d, "e": e_d, "dp": dp_d, "ej": ej_d, "pdf": pdf_d,
+                        })
+                if rebuilt_def:
+                    td["defense"] = rebuilt_def
+                    print(f"       [BACKUP jugador.php] Defensiva de Relámpago T{c_info['number']} reconstruida: {len(rebuilt_def)} defensores!")
+
+        # RECONSTRUCCIÓN AUTOMÁTICA PARA RIVALES DESDE lideresV1.php si estadisticasequipo.php vino vacío!
+        rivals_missing_bat = [tn for tn, td in teams_data.items() if not td["is_ours"] and not td["batting"]]
+        if rivals_missing_bat:
+            lid_bat_html = fetch_html(f"lideresV1.php?lig={lig_id}&cam={cam_id}&dep=AVE", referer=cam_url_full)
+            lid_pic_html = fetch_html(f"lideresV1.php?lig={lig_id}&cam={cam_id}&dep=EFE", referer=cam_url_full)
+            lid_bat_by_t = parse_lideres_table(lid_bat_html, "bat")
+            lid_pic_by_t = parse_lideres_table(lid_pic_html, "pic")
+            filled_r = 0
+            for tn, td in teams_data.items():
+                tk = norm_text(tn)
+                if not td["batting"] and tk in lid_bat_by_t:
+                    td["batting"] = lid_bat_by_t[tk]
+                    filled_r += 1
+                if not td["pitching"] and tk in lid_pic_by_t:
+                    td["pitching"] = lid_pic_by_t[tk]
+            if filled_r:
+                print(f"       [BACKUP lideresV1.php] Estadísticas de {filled_r} equipos recuperadas desde Líderes.")
 
         tournaments_out.append({
             "cam_id": cam_id, "number": c_info["number"], "name": c_info["name"], "squad": c_info["squad"],
