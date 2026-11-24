@@ -16,6 +16,7 @@ import re
 import sys
 import time
 import unicodedata
+import http.cookiejar
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,7 +45,11 @@ def clean_cell(s: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(str(s or ""))).strip()
 
 
-def fetch_html(url: str, retries: int = 2) -> str:
+_COOKIE_JAR = http.cookiejar.CookieJar()
+_OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_COOKIE_JAR))
+
+
+def fetch_html(url: str, retries: int = 3, referer: str = "") -> str:
     full_url = url if url.startswith("http") else urllib.parse.urljoin(BASE_SITE, url.lstrip("/"))
     parsed = urllib.parse.urlsplit(full_url)
     safe_url = urllib.parse.urlunsplit((
@@ -53,18 +58,31 @@ def fetch_html(url: str, retries: int = 2) -> str:
         urllib.parse.quote(parsed.query, safe="=&%+-_."),
         parsed.fragment,
     ))
-    req = urllib.request.Request(safe_url, headers=HEADERS)
+    hdrs = dict(HEADERS)
+    hdrs["Referer"] = referer or BASE_SITE
+    req = urllib.request.Request(safe_url, headers=hdrs)
     for attempt in range(retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=25) as resp:
+            with _OPENER.open(req, timeout=30) as resp:
                 raw = resp.read()
                 try:
-                    return raw.decode("utf-8")
+                    txt = raw.decode("utf-8")
                 except UnicodeDecodeError:
-                    return raw.decode("latin-1", errors="replace")
+                    txt = raw.decode("latin-1", errors="replace")
+                if len(txt.strip()) < 80 and attempt < retries:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                return txt
+        except urllib.error.HTTPError as e:
+            wait_s = 2.5 * (attempt + 1) if e.code in (403, 429, 500, 502, 503, 504) else 1.2
+            if attempt < retries:
+                time.sleep(wait_s)
+            else:
+                print(f"[WARN] HTTP {e.code} leyendo {safe_url}: {e.reason}")
+                return ""
         except Exception as e:
             if attempt < retries:
-                time.sleep(0.8)
+                time.sleep(1.8 * (attempt + 1))
             else:
                 print(f"[WARN] No se pudo leer {safe_url}: {e}")
                 return ""
@@ -103,11 +121,25 @@ class NestedTableAndLinkParser(HTMLParser):
                 "cur_cell": None,
             })
         elif t == "tr" and self._table_stack:
-            self._table_stack[-1]["cur_row"] = []
+            top = self._table_stack[-1]
+            if top["cur_cell"] is not None and top["cur_row"] is not None:
+                top["cur_row"].append({
+                    "text": clean_cell("".join(top["cur_cell"]["text_parts"])),
+                    "links": list(top["cur_cell"]["links"]),
+                })
+                top["cur_cell"] = None
+            if top["cur_row"]:
+                top["rows"].append(top["cur_row"])
+            top["cur_row"] = []
         elif t in ("td", "th") and self._table_stack:
             top = self._table_stack[-1]
             if top["cur_row"] is None:
                 top["cur_row"] = []
+            if top["cur_cell"] is not None:
+                top["cur_row"].append({
+                    "text": clean_cell("".join(top["cur_cell"]["text_parts"])),
+                    "links": list(top["cur_cell"]["links"]),
+                })
             top["cur_cell"] = {"text_parts": [], "links": []}
 
     def handle_endtag(self, tag: str) -> None:
@@ -146,6 +178,15 @@ class NestedTableAndLinkParser(HTMLParser):
             top["cur_row"] = None
         elif t == "table" and self._table_stack:
             finished = self._table_stack.pop()
+            if finished["cur_cell"] is not None and finished["cur_row"] is not None:
+                finished["cur_row"].append({
+                    "text": clean_cell("".join(finished["cur_cell"]["text_parts"])),
+                    "links": list(finished["cur_cell"]["links"]),
+                })
+                finished["cur_cell"] = None
+            if finished["cur_row"]:
+                finished["rows"].append(finished["cur_row"])
+                finished["cur_row"] = None
             if finished["rows"]:
                 self.tables.append({"heading": finished["heading"], "rows": finished["rows"]})
 
@@ -720,14 +761,29 @@ def parse_player_detail(html_str: str) -> Dict[str, Any]:
 # FLUJO PRINCIPAL
 # ==============================================================================
 
+def load_previous_snapshot(output_path: Path) -> Dict[str, Dict[str, Any]]:
+    """Carga el snapshot anterior (indexado por cam_id) para NUNCA sobrescribir datos buenos con ceros."""
+    if not output_path.exists():
+        return {}
+    try:
+        prev = json.loads(output_path.read_text(encoding="utf-8"))
+        return {str(t.get("cam_id")): t for t in prev.get("tournaments", []) if t.get("cam_id")}
+    except Exception:
+        return {}
+
+
 def run_extraction(config_path: Path, output_path: Path) -> None:
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     lig_id = cfg["league_id"]
     our_kw = norm_text(cfg.get("our_team_keyword", "Relampago"))
+    prev_by_cam = load_previous_snapshot(output_path)
 
     print(f"[INFO] Leyendo liga {lig_id}: {cfg['league_url']}")
     league_html = fetch_html(cfg["league_url"])
     if not league_html:
+        if prev_by_cam:
+            print("[WARN] No se pudo conectar con beisbolysoftbol.com; conservando snapshot anterior intacto.")
+            return
         print("[ERROR] No se pudo conectar con beisbolysoftbol.com.")
         sys.exit(1)
 
@@ -737,9 +793,14 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
     tournaments_out: List[Dict[str, Any]] = []
 
     for c_info in candidates:
-        cam_id = c_info["cam_id"]
-        cam_html = fetch_html(f"campeonato.php?lig={lig_id}&cam={cam_id}")
+        cam_id = str(c_info["cam_id"])
+        prev_t = prev_by_cam.get(cam_id, {})
+        cam_url_full = f"{BASE_SITE}campeonato.php?lig={lig_id}&cam={cam_id}"
+        cam_html = fetch_html(f"campeonato.php?lig={lig_id}&cam={cam_id}", referer=cfg["league_url"])
         standings_blocks, teams_map = parse_campeonato_standings(cam_html)
+
+        if not standings_blocks and prev_t.get("standings_blocks"):
+            standings_blocks = prev_t["standings_blocks"]
 
         has_relampago = any(our_kw in norm_text(t["name"]) for t in teams_map.values()) or any(
             our_kw in norm_text(r["team"]) for blk in standings_blocks for r in blk["rows"]
@@ -748,31 +809,63 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
             print(f"[SKIP] {c_info['name']} (cam={cam_id}): no participa {cfg['our_team_display']}.")
             continue
 
+        # Si el torneo tiene standings pero teams_map vino vacío (fallo temporal de enlaces), restaurar desde previo
+        if not teams_map and prev_t.get("teams"):
+            for tname, td in prev_t["teams"].items():
+                if td.get("equ_id"):
+                    teams_map[str(td["equ_id"])] = {"equ_id": str(td["equ_id"]), "name": tname}
+
         print(f"[INFO] Procesando {c_info['name']} (cam={cam_id}, Equipo {c_info['squad']}) — {len(teams_map)} equipos...")
-        res_html = fetch_html(f"todosresultados.php?lig={lig_id}&cam={cam_id}")
+        res_html = fetch_html(f"todosresultados.php?lig={lig_id}&cam={cam_id}", referer=cam_url_full)
         games = parse_all_results(res_html)
+        if not games and prev_t.get("games"):
+            games = prev_t["games"]
 
         teams_data: Dict[str, Dict[str, Any]] = {}
         relampago_player_ids: Dict[str, str] = {}
         relampago_roster_names: List[Dict[str, str]] = []
+        cam_name_q = urllib.parse.quote(c_info["name"])
 
         for equ_id, t_meta in teams_map.items():
             tname = t_meta["name"]
             is_ours = our_kw in norm_text(tname)
             dbg = f"{tname} T{c_info['number']}" if is_ours else ""
+            eq_ref = f"{BASE_SITE}equipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}"
 
-            ofe_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=ofe")
-            pic_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=pic")
-            def_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=def")
+            # 1) Pausa cortés para evitar bloqueos/rate-limit de beisbolysoftbol.com
+            ofe_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=ofe&{cam_name_q}", referer=eq_ref)
+            time.sleep(0.25)
+            pic_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=pic&{cam_name_q}", referer=eq_ref)
+            time.sleep(0.25)
+            def_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=def&{cam_name_q}", referer=eq_ref)
+            time.sleep(0.25)
 
             batting = parse_team_batting(ofe_html)
             pitching = parse_team_pitching(pic_html, debug_tag=dbg)
             defense = parse_team_defense(def_html, debug_tag=dbg)
 
+            # Diagnóstico si Relámpago vino sin bateo pese a tener HTML
+            if is_ours and not batting and ofe_html:
+                snippet = re.sub(r"\s+", " ", ofe_html)[:260]
+                print(f"       [DEBUG {dbg} est=ofe] 0 bateadores (len={len(ofe_html)}). Inicio HTML: {snippet}")
+
+            # Protección anti-borrado: si vino vacío pero teníamos datos válidos previos, conservarlos
+            prev_team = (prev_t.get("teams") or {}).get(tname, {})
+            if not batting and prev_team.get("batting"):
+                batting = prev_team["batting"]
+                print(f"       [CACHE] Conservando bateo previo para {tname} ({len(batting)} jug.)")
+            if not pitching and prev_team.get("pitching"):
+                pitching = prev_team["pitching"]
+                print(f"       [CACHE] Conservando pitcheo previo para {tname} ({len(pitching)} lanz.)")
+            if not defense and prev_team.get("defense"):
+                defense = prev_team["defense"]
+                print(f"       [CACHE] Conservando defensa previa para {tname} ({len(defense)} def.)")
+
             if is_ours:
-                # También leer roster.php para tener a TODOS los inscritos (incluso si aún no batean en T90)
-                ros_html = fetch_html(f"roster.php?equ={equ_id}&lig={lig_id}&cam={cam_id}")
+                ros_html = fetch_html(f"roster.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&{cam_name_q}", referer=eq_ref)
                 relampago_roster_names = parse_team_roster(ros_html)
+                if not relampago_roster_names and prev_team.get("roster"):
+                    relampago_roster_names = prev_team["roster"]
                 for p in relampago_roster_names:
                     if p.get("jug_id"):
                         relampago_player_ids[p["jug_id"]] = p["name"]
@@ -787,20 +880,20 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
                 "roster": relampago_roster_names if is_ours else [],
                 "batting": batting, "pitching": pitching, "defense": defense,
             }
-            time.sleep(0.06)
 
         # Fichas detalladas de Relámpago (posiciones AL CAMPO + backup de pitcheo)
-        player_details: Dict[str, Dict[str, Any]] = {}
+        player_details: Dict[str, Dict[str, Any]] = dict(prev_t.get("relampago_player_details") or {})
         if relampago_player_ids:
             print(f"       Leyendo fichas individuales de {len(relampago_player_ids)} jugadores de Relámpago...")
             for jug_id, pname in relampago_player_ids.items():
-                j_html = fetch_html(f"jugador.php?jug={jug_id}&cam={cam_id}")
+                j_html = fetch_html(f"jugador.php?jug={jug_id}&cam={cam_id}", referer=cam_url_full)
                 if j_html:
                     det = parse_player_detail(j_html)
                     det["name"] = pname
                     det["jug_id"] = jug_id
-                    player_details[jug_id] = det
-                time.sleep(0.05)
+                    if det["positions"] or det["game_log"] or det["pitching_backup"] or jug_id not in player_details:
+                        player_details[jug_id] = det
+                time.sleep(0.20)
 
         tournaments_out.append({
             "cam_id": cam_id, "number": c_info["number"], "name": c_info["name"], "squad": c_info["squad"],
@@ -817,7 +910,7 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[OK] Snapshot v2 guardado en {output_path} ({len(tournaments_out)} torneos de Relámpago).")
+    print(f"[OK] Snapshot v4 guardado en {output_path} ({len(tournaments_out)} torneos de Relámpago).")
 
 
 if __name__ == "__main__":
