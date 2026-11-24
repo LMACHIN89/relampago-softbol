@@ -987,7 +987,10 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
             <div class="hero-top">
               <div class="logo-wrap"><img src="logo_relampago.png" alt="Logo Relámpago del Caribe" /></div>
               <div>
-                <div class="slogan-pill">⚡ ${{esc(data.slogan)}} · SCOUTING SOFTBOL UNIMET</div>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+                  <div class="slogan-pill" style="margin-bottom:0">⚡ ${{esc(data.slogan)}} · SCOUTING SOFTBOL UNIMET</div>
+                  <a href="tesoreria.html" style="display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.14);color:#f0d72b;border:1.5px solid #f0d72b;border-radius:999px;padding:3px 13px;font-size:12px;font-weight:900;text-decoration:none">💰 Tesorería &amp; Ficha Oficial →</a>
+                </div>
                 <h1>${{esc(data.brand)}} — Portal Táctico A &amp; B</h1>
                 <div class="hero-sub">${{esc(data.league_name)}} · Vista activa: <strong>${{esc(view.label)}}</strong> · Actualizado: ${{esc(data.updated_at)}}</div>
               </div>
