@@ -1,12 +1,12 @@
 {
-  "extracted_at": "24/11/2026 21:09",
+  "extracted_at": "24/11/2026 21:26",
   "league_id": 174,
   "league_name": "Liga de Softbol VENEZUELA-UNIMET",
   "tournaments": [
     {
       "cam_id": "3191",
       "number": 90,
-      "name": "🏆 Torneo 90 Lanz Lento",
+      "name": "Torneo 90 Lanz Lento",
       "squad": "B",
       "standings_blocks": [
         {
@@ -561,7 +561,7 @@
     {
       "cam_id": "3156",
       "number": 89,
-      "name": "🏆 Torneo 89 Lanz Lento",
+      "name": "Torneo 89 Lanz Lento",
       "squad": "A",
       "standings_blocks": [
         {
@@ -1479,7 +1479,7 @@
     {
       "cam_id": "3072",
       "number": 87,
-      "name": "🏆 Torneo 87 Lanz Lento",
+      "name": "Torneo 87 Lanz Lento",
       "squad": "A",
       "standings_blocks": [
         {
