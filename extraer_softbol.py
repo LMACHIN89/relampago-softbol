@@ -952,6 +952,142 @@ def parse_lideres_table(html_str: str, mode: str) -> Dict[str, List[Dict[str, An
 # FLUJO PRINCIPAL
 # ==============================================================================
 
+
+import subprocess as _subprocess
+
+
+def inspect_tail_html(html_str: str) -> str:
+    """Devuelve los últimos 500 caracteres del HTML para detectar errores PHP, bloqueos o cortes."""
+    if not html_str:
+        return "VACÍO"
+    has_body_close = "</body>" in html_str.lower()
+    has_table = "<table" in html_str.lower()
+    tail = re.sub(r"\s+", " ", html_str[-550:]).strip()
+    return f"len={len(html_str)} has_table={has_table} has_body_close={has_body_close} tail='{tail}'"
+
+
+class BrowserFetcher:
+    """Fallback opcional con Playwright (Chromium real) si urllib es bloqueado o falta JS."""
+    def __init__(self) -> None:
+        self._pw = None
+        self._browser = None
+        self._page = None
+        self.available = False
+
+    def start(self) -> bool:
+        if self.available:
+            return True
+        try:
+            from playwright.sync_api import sync_playwright
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
+            ctx = self._browser.new_context(
+                user_agent=HEADERS["User-Agent"],
+                locale="es-VE",
+                viewport={"width": 1280, "height": 800},
+            )
+            self._page = ctx.new_page()
+            # Bloquear anuncios, imágenes y analytics para cargar cada página en <0.5s
+            def _route_filter(route):
+                url_l = route.request.url.lower()
+                rtype = route.request.resource_type
+                if rtype in ("image", "media", "font") or any(d in url_l for d in (
+                    "googlesyndication", "doubleclick", "googletagmanager", "google-analytics",
+                    "facebook", "adservice", "pagead", "amazon-adsystem"
+                )):
+                    route.abort()
+                else:
+                    route.continue_()
+            self._page.route("**/*", _route_filter)
+            self.available = True
+            print("[INFO] Navegador Playwright (Chromium) iniciado como respaldo automático.")
+            return True
+        except Exception as e:
+            print(f"[WARN] Playwright no disponible: {e}")
+            self.available = False
+            return False
+
+    def get(self, url: str, wait_ms: int = 700) -> str:
+        if not self.available or self._page is None:
+            return ""
+        full_url = url if url.startswith("http") else urllib.parse.urljoin(BASE_SITE, url.lstrip("/"))
+        try:
+            self._page.goto(full_url, wait_until="domcontentloaded", timeout=25000)
+            if wait_ms > 0:
+                self._page.wait_for_timeout(wait_ms)
+            return self._page.content()
+        except Exception as e:
+            print(f"[WARN] Playwright fallo en {full_url}: {e}")
+            return ""
+
+    def close(self) -> None:
+        try:
+            if self._browser:
+                self._browser.close()
+            if self._pw:
+                self._pw.stop()
+        except Exception:
+            pass
+        self.available = False
+
+
+def snapshot_has_real_stats(snap: Dict[str, Any]) -> int:
+    """Cuenta cuántos registros de bateo reales existen en un snapshot."""
+    total = 0
+    for t in snap.get("tournaments", []):
+        for td in (t.get("teams") or {}).values():
+            total += len(td.get("batting") or [])
+    return total
+
+
+def load_best_previous_snapshot(output_path: Path) -> Dict[str, Dict[str, Any]]:
+    """
+    1) Intenta leer `data/softbol_snapshot.json` actual.
+    2) Si está vacío (0 bateadores porque una corrida previa lo borró), busca automáticamente
+       en el historial de Git el último commit donde `data/softbol_snapshot.json` SÍ tenía datos reales.
+    """
+    if output_path.exists():
+        try:
+            cur = json.loads(output_path.read_text(encoding="utf-8"))
+            cnt = snapshot_has_real_stats(cur)
+            if cnt > 0:
+                print(f"[INFO] Cache previo válido detectado en {output_path} ({cnt} bateadores).")
+                return {str(t.get("cam_id")): t for t in cur.get("tournaments", []) if t.get("cam_id")}
+        except Exception:
+            pass
+
+    # Rescate automático desde el historial de Git (requiere fetch-depth: 0 en checkout)
+    try:
+        rel_p = output_path.as_posix()
+        log_res = _subprocess.run(
+            ["git", "log", "-n", "30", "--format=%H", "--", rel_p],
+            capture_output=True, text=True, timeout=15
+        )
+        if log_res.returncode == 0:
+            for commit_hash in log_res.stdout.splitlines():
+                commit_hash = commit_hash.strip()
+                if not commit_hash:
+                    continue
+                show_res = _subprocess.run(
+                    ["git", "show", f"{commit_hash}:{rel_p}"],
+                    capture_output=True, text=True, timeout=15
+                )
+                if show_res.returncode != 0:
+                    continue
+                try:
+                    cand = json.loads(show_res.stdout)
+                except Exception:
+                    continue
+                cnt = snapshot_has_real_stats(cand)
+                if cnt > 0:
+                    print(f"[RESCATE GIT] Snapshot válido recuperado del commit {commit_hash[:7]} ({cnt} bateadores)!")
+                    return {str(t.get("cam_id")): t for t in cand.get("tournaments", []) if t.get("cam_id")}
+    except Exception as e:
+        print(f"[WARN] No se pudo consultar historial de Git para rescate: {e}")
+
+    return {}
+
+
 def load_previous_snapshot(output_path: Path) -> Dict[str, Dict[str, Any]]:
     """Carga el snapshot anterior (indexado por cam_id) para NUNCA sobrescribir datos buenos con ceros."""
     if not output_path.exists():
@@ -967,13 +1103,13 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     lig_id = cfg["league_id"]
     our_kw = norm_text(cfg.get("our_team_keyword", "Relampago"))
-    prev_by_cam = load_previous_snapshot(output_path)
+    prev_by_cam = load_best_previous_snapshot(output_path)
 
     print(f"[INFO] Leyendo liga {lig_id}: {cfg['league_url']}")
     league_html = fetch_html(cfg["league_url"])
     if not league_html:
         if prev_by_cam:
-            print("[WARN] No se pudo conectar con beisbolysoftbol.com; conservando snapshot anterior intacto.")
+            print("[WARN] No se pudo conectar con beisbolysoftbol.com; conservando snapshot válido.")
             return
         print("[ERROR] No se pudo conectar con beisbolysoftbol.com.")
         sys.exit(1)
@@ -981,179 +1117,214 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
     candidates = discover_tournaments(league_html, cfg)
     print(f"[INFO] Campeonatos candidatos (>= T{cfg.get('min_tournament_number', 87)}): {[(c['name'], c['cam_id'], c['squad']) for c in candidates]}")
 
+    browser = BrowserFetcher()
+    use_browser_for_stats = False
+    tested_browser = False
     tournaments_out: List[Dict[str, Any]] = []
 
-    for c_info in candidates:
-        cam_id = str(c_info["cam_id"])
-        prev_t = prev_by_cam.get(cam_id, {})
-        cam_url_full = f"{BASE_SITE}campeonato.php?lig={lig_id}&cam={cam_id}"
-        cam_html = fetch_html(f"campeonato.php?lig={lig_id}&cam={cam_id}", referer=cfg["league_url"])
-        standings_blocks, teams_map = parse_campeonato_standings(cam_html)
+    try:
+        for c_info in candidates:
+            cam_id = str(c_info["cam_id"])
+            prev_t = prev_by_cam.get(cam_id, {})
+            cam_url_full = f"{BASE_SITE}campeonato.php?lig={lig_id}&cam={cam_id}"
+            cam_html = fetch_html(f"campeonato.php?lig={lig_id}&cam={cam_id}", referer=cfg["league_url"])
+            standings_blocks, teams_map = parse_campeonato_standings(cam_html)
 
-        if not standings_blocks and prev_t.get("standings_blocks"):
-            standings_blocks = prev_t["standings_blocks"]
+            if not standings_blocks and prev_t.get("standings_blocks"):
+                standings_blocks = prev_t["standings_blocks"]
 
-        has_relampago = any(our_kw in norm_text(t["name"]) for t in teams_map.values()) or any(
-            our_kw in norm_text(r["team"]) for blk in standings_blocks for r in blk["rows"]
-        )
-        if not has_relampago:
-            print(f"[SKIP] {c_info['name']} (cam={cam_id}): no participa {cfg['our_team_display']}.")
-            continue
+            has_relampago = any(our_kw in norm_text(t["name"]) for t in teams_map.values()) or any(
+                our_kw in norm_text(r["team"]) for blk in standings_blocks for r in blk["rows"]
+            )
+            if not has_relampago:
+                print(f"[SKIP] {c_info['name']} (cam={cam_id}): no participa {cfg['our_team_display']}.")
+                continue
 
-        # Si el torneo tiene standings pero teams_map vino vacío (fallo temporal de enlaces), restaurar desde previo
-        if not teams_map and prev_t.get("teams"):
-            for tname, td in prev_t["teams"].items():
-                if td.get("equ_id"):
-                    teams_map[str(td["equ_id"])] = {"equ_id": str(td["equ_id"]), "name": tname}
+            if not teams_map and prev_t.get("teams"):
+                for tname, td in prev_t["teams"].items():
+                    if td.get("equ_id"):
+                        teams_map[str(td["equ_id"])] = {"equ_id": str(td["equ_id"]), "name": tname}
 
-        print(f"[INFO] Procesando {c_info['name']} (cam={cam_id}, Equipo {c_info['squad']}) — {len(teams_map)} equipos...")
-        res_html = fetch_html(f"todosresultados.php?lig={lig_id}&cam={cam_id}", referer=cam_url_full)
-        games = parse_all_results(res_html)
-        if not games and prev_t.get("games"):
-            games = prev_t["games"]
+            # Verificar si el torneo ya tiene juegos jugados (en T90 con 0 juegos es normal tener 0 bateadores)
+            torneo_tiene_juegos = any(
+                r.get("j", 0) > 0 for blk in standings_blocks for r in blk.get("rows", [])
+            )
 
-        teams_data: Dict[str, Dict[str, Any]] = {}
-        relampago_player_ids: Dict[str, str] = {}
-        relampago_roster_names: List[Dict[str, str]] = []
-        our_tname = ""
-        printed_body_diag = False
+            print(f"[INFO] Procesando {c_info['name']} (cam={cam_id}, Equipo {c_info['squad']}, juegos_jugados={torneo_tiene_juegos}) — {len(teams_map)} equipos...")
+            res_html = fetch_html(f"todosresultados.php?lig={lig_id}&cam={cam_id}", referer=cam_url_full)
+            games = parse_all_results(res_html)
+            if not games and prev_t.get("games"):
+                games = prev_t["games"]
 
-        for equ_id, t_meta in teams_map.items():
-            tname = t_meta["name"]
-            is_ours = our_kw in norm_text(tname)
-            if is_ours:
-                our_tname = tname
-            dbg = f"{tname} T{c_info['number']}" if is_ours else ""
-            eq_ref = f"{BASE_SITE}equipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}"
+            teams_data: Dict[str, Dict[str, Any]] = {}
+            relampago_player_ids: Dict[str, str] = {}
+            relampago_roster_names: List[Dict[str, str]] = []
+            our_tname = ""
+            cam_name_q = urllib.parse.quote(c_info["name"])
 
-            # Visitar equipo.php primero en nuestro equipo para iniciar sesión PHP si hace falta
-            if is_ours:
-                fetch_html(f"equipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}", referer=cam_url_full)
-                time.sleep(0.15)
+            # Procesar Relámpago PRIMERO para detectar al instante si urllib funciona o si debemos usar Playwright
+            ordered_items = sorted(
+                teams_map.items(),
+                key=lambda kv: (0 if our_kw in norm_text(kv[1]["name"]) else 1, kv[1]["name"]),
+            )
 
-            ofe_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=ofe", referer=eq_ref)
-            time.sleep(0.20)
-            pic_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=pic", referer=eq_ref)
-            time.sleep(0.20)
-            def_html = fetch_html(f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=def", referer=eq_ref)
-            time.sleep(0.20)
+            for equ_id, t_meta in ordered_items:
+                tname = t_meta["name"]
+                is_ours = our_kw in norm_text(tname)
+                if is_ours:
+                    our_tname = tname
+                dbg = f"{tname} T{c_info['number']}" if is_ours else ""
+                eq_ref = f"{BASE_SITE}equipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}"
 
-            batting = parse_team_batting(ofe_html)
-            pitching = parse_team_pitching(pic_html, debug_tag=dbg)
-            defense = parse_team_defense(def_html, debug_tag=dbg)
+                ofe_url = f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=ofe&{cam_name_q}"
+                pic_url = f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=pic&{cam_name_q}"
+                def_url = f"estadisticasequipo.php?equ={equ_id}&lig={lig_id}&cam={cam_id}&est=def&{cam_name_q}"
 
-            # Diagnóstico real del <body> si est=ofe vino sin tabla
-            if is_ours and not batting and ofe_html and not printed_body_diag:
-                printed_body_diag = True
-                print(f"       [DIAG {dbg} est=ofe len={len(ofe_html)}] {inspect_empty_html(ofe_html)}")
+                if use_browser_for_stats and browser.available:
+                    ofe_html = browser.get(ofe_url)
+                    pic_html = browser.get(pic_url)
+                    def_html = browser.get(def_url)
+                else:
+                    ofe_html = fetch_html(ofe_url, referer=eq_ref)
+                    time.sleep(0.18)
+                    pic_html = fetch_html(pic_url, referer=eq_ref)
+                    time.sleep(0.18)
+                    def_html = fetch_html(def_url, referer=eq_ref)
+                    time.sleep(0.18)
 
-            prev_team = (prev_t.get("teams") or {}).get(tname, {})
-            if not batting and prev_team.get("batting"):
-                batting = prev_team["batting"]
-            if not pitching and prev_team.get("pitching"):
-                pitching = prev_team["pitching"]
-            if not defense and prev_team.get("defense"):
-                defense = prev_team["defense"]
+                batting = parse_team_batting(ofe_html)
+                pitching = parse_team_pitching(pic_html, debug_tag=dbg if torneo_tiene_juegos else "")
+                defense = parse_team_defense(def_html, debug_tag=dbg if torneo_tiene_juegos else "")
 
-            if is_ours:
-                ros_html = fetch_html(f"roster.php?equ={equ_id}&lig={lig_id}&cam={cam_id}", referer=eq_ref)
-                relampago_roster_names = parse_team_roster(ros_html)
-                if not relampago_roster_names and prev_team.get("roster"):
-                    relampago_roster_names = prev_team["roster"]
-                for p in relampago_roster_names:
-                    if p.get("jug_id"):
-                        relampago_player_ids[p["jug_id"]] = p["name"]
-                for lst in (batting, pitching, defense):
-                    for p in lst:
+                # Si es un torneo CON juegos y Relámpago vino sin bateo por urllib, imprimir el TAIL exacto
+                # y probar automáticamente con navegador Chromium real (Playwright)!
+                if is_ours and torneo_tiene_juegos and not batting and not tested_browser:
+                    tested_browser = True
+                    print(f"       [TAIL urllib {dbg} est=ofe] {inspect_tail_html(ofe_html)}")
+                    if browser.start():
+                        # Abrir liga -> campeonato -> equipo -> estadisticasequipo como un usuario real
+                        browser.get(cfg["league_url"], wait_ms=500)
+                        browser.get(eq_ref, wait_ms=500)
+                        ofe_pw = browser.get(ofe_url, wait_ms=900)
+                        bat_pw = parse_team_batting(ofe_pw)
+                        if bat_pw:
+                            use_browser_for_stats = True
+                            batting = bat_pw
+                            pic_pw = browser.get(pic_url, wait_ms=700)
+                            def_pw = browser.get(def_url, wait_ms=700)
+                            pitching = parse_team_pitching(pic_pw, debug_tag=dbg)
+                            defense = parse_team_defense(def_pw, debug_tag=dbg)
+                            print(f"       [PLAYWRIGHT OK] {dbg}: bateo={len(batting)}, pitcheo={len(pitching)}, defensa={len(defense)}!")
+                        else:
+                            print(f"       [TAIL Playwright {dbg} est=ofe] {inspect_tail_html(ofe_pw)}")
+
+                # Rescate automático desde cache/Git si la web devolvió vacío
+                prev_team = (prev_t.get("teams") or {}).get(tname, {})
+                if not batting and prev_team.get("batting"):
+                    batting = prev_team["batting"]
+                if not pitching and prev_team.get("pitching"):
+                    pitching = prev_team["pitching"]
+                if not defense and prev_team.get("defense"):
+                    defense = prev_team["defense"]
+
+                if is_ours:
+                    ros_html = browser.get(f"roster.php?equ={equ_id}&lig={lig_id}&cam={cam_id}", wait_ms=500) if (use_browser_for_stats and browser.available) else fetch_html(f"roster.php?equ={equ_id}&lig={lig_id}&cam={cam_id}", referer=eq_ref)
+                    relampago_roster_names = parse_team_roster(ros_html)
+                    if not relampago_roster_names and prev_team.get("roster"):
+                        relampago_roster_names = prev_team["roster"]
+                    for p in relampago_roster_names:
                         if p.get("jug_id"):
                             relampago_player_ids[p["jug_id"]] = p["name"]
-                print(f"       Relámpago T{c_info['number']} (est): roster={len(relampago_roster_names)}, bateo={len(batting)}, pitcheo={len(pitching)}, defensa={len(defense)}")
+                    for lst in (batting, pitching, defense):
+                        for p in lst:
+                            if p.get("jug_id"):
+                                relampago_player_ids[p["jug_id"]] = p["name"]
+                    print(f"       Relámpago T{c_info['number']}: roster={len(relampago_roster_names)}, bateo={len(batting)}, pitcheo={len(pitching)}, defensa={len(defense)}")
 
-            teams_data[tname] = {
-                "equ_id": equ_id, "name": tname, "is_ours": is_ours,
-                "roster": relampago_roster_names if is_ours else [],
-                "batting": batting, "pitching": pitching, "defense": defense,
-            }
+                teams_data[tname] = {
+                    "equ_id": equ_id, "name": tname, "is_ours": is_ours,
+                    "roster": relampago_roster_names if is_ours else [],
+                    "batting": batting, "pitching": pitching, "defense": defense,
+                }
 
-        # Fichas detalladas de Relámpago (posiciones AL CAMPO + respaldo COMPLETO de bateo y pitcheo)
-        player_details: Dict[str, Dict[str, Any]] = dict(prev_t.get("relampago_player_details") or {})
-        if relampago_player_ids:
-            print(f"       Leyendo fichas individuales de {len(relampago_player_ids)} jugadores de Relámpago...")
-            for jug_id, pname in relampago_player_ids.items():
-                j_html = fetch_html(f"jugador.php?jug={jug_id}&cam={cam_id}", referer=cam_url_full)
-                if j_html:
-                    det = parse_player_detail(j_html, tournament_name=c_info["name"], tournament_num=c_info["number"])
-                    det["name"] = pname
-                    det["jug_id"] = jug_id
-                    if det["positions"] or det["game_log"] or det["batting_backup"] or det["pitching_backup"] or jug_id not in player_details:
-                        player_details[jug_id] = det
-                time.sleep(0.15)
+            # Fichas detalladas de Relámpago (posiciones AL CAMPO + backup de bateo y pitcheo)
+            player_details: Dict[str, Dict[str, Any]] = dict(prev_t.get("relampago_player_details") or {})
+            if relampago_player_ids and torneo_tiene_juegos:
+                print(f"       Leyendo fichas individuales de {len(relampago_player_ids)} jugadores de Relámpago...")
+                printed_jug_tail = False
+                for jug_id, pname in relampago_player_ids.items():
+                    j_url = f"jugador.php?jug={jug_id}&cam={cam_id}&{urllib.parse.quote(pname)}"
+                    j_html = browser.get(j_url, wait_ms=500) if (use_browser_for_stats and browser.available) else fetch_html(j_url, referer=cam_url_full)
+                    if j_html:
+                        det = parse_player_detail(j_html, tournament_name=c_info["name"], tournament_num=c_info["number"])
+                        det["name"] = pname
+                        det["jug_id"] = jug_id
+                        if det["positions"] or det["game_log"] or det["batting_backup"] or det["pitching_backup"]:
+                            player_details[jug_id] = det
+                        elif not printed_jug_tail:
+                            printed_jug_tail = True
+                            print(f"       [TAIL jugador.php {pname}] {inspect_tail_html(j_html)}")
+                    if not use_browser_for_stats:
+                        time.sleep(0.12)
 
-        # RECONSTRUCCIÓN AUTOMÁTICA PARA RELÁMPAGO DESDE jugador.php si estadisticasequipo.php vino vacío!
-        if our_tname and our_tname in teams_data and player_details:
-            td = teams_data[our_tname]
-            if not td["batting"]:
-                rebuilt_bat = []
-                for jid, det in player_details.items():
-                    bb = det.get("batting_backup")
-                    if bb and (bb.get("vb", 0) > 0 or bb.get("al", 0) > 0):
-                        rebuilt_bat.append({"jug_id": jid, "name": det["name"], **bb})
-                if rebuilt_bat:
-                    td["batting"] = rebuilt_bat
-                    print(f"       [BACKUP jugador.php] Bateo de Relámpago T{c_info['number']} reconstruido: {len(rebuilt_bat)} bateadores!")
-            if not td["pitching"]:
-                rebuilt_pic = []
-                for jid, det in player_details.items():
-                    pb = det.get("pitching_backup")
-                    if pb and pb.get("ip_real", 0) > 0:
-                        rebuilt_pic.append({"jug_id": jid, "name": det["name"], **pb})
-                if rebuilt_pic:
-                    td["pitching"] = rebuilt_pic
-                    print(f"       [BACKUP jugador.php] Pitcheo de Relámpago T{c_info['number']} reconstruido: {len(rebuilt_pic)} pitchers!")
-            if not td["defense"]:
-                rebuilt_def = []
-                for jid, det in player_details.items():
-                    pos_rows = det.get("positions") or []
-                    if pos_rows:
-                        jj_d = sum(x.get("jj", 0) for x in pos_rows)
-                        po_d = sum(x.get("po", 0) for x in pos_rows)
-                        as_d = sum(x.get("as", 0) for x in pos_rows)
-                        e_d = sum(x.get("e", 0) for x in pos_rows)
-                        dp_d = sum(x.get("dp", 0) for x in pos_rows)
-                        ej_d = round(sum(float(x.get("ej", 0) or 0) for x in pos_rows), 2)
-                        lt_d = po_d + as_d + e_d
-                        pdf_d = round((po_d + as_d) / lt_d, 3) if lt_d > 0 else 0.0
-                        rebuilt_def.append({
-                            "jug_id": jid, "name": det["name"], "pos": pos_rows[0]["pos"],
-                            "jj": jj_d, "po": po_d, "as": as_d, "e": e_d, "dp": dp_d, "ej": ej_d, "pdf": pdf_d,
-                        })
-                if rebuilt_def:
-                    td["defense"] = rebuilt_def
-                    print(f"       [BACKUP jugador.php] Defensiva de Relámpago T{c_info['number']} reconstruida: {len(rebuilt_def)} defensores!")
+            # Reconstrucción desde jugador.php si estadisticasequipo.php estuvo vacío
+            if our_tname and our_tname in teams_data and player_details:
+                td = teams_data[our_tname]
+                if not td["batting"]:
+                    rebuilt_bat = [{"jug_id": jid, "name": det["name"], **det["batting_backup"]} for jid, det in player_details.items() if det.get("batting_backup") and (det["batting_backup"].get("vb", 0) > 0 or det["batting_backup"].get("al", 0) > 0)]
+                    if rebuilt_bat:
+                        td["batting"] = rebuilt_bat
+                        print(f"       [BACKUP jugador.php] Bateo de Relámpago T{c_info['number']}: {len(rebuilt_bat)} bateadores.")
+                if not td["pitching"]:
+                    rebuilt_pic = [{"jug_id": jid, "name": det["name"], **det["pitching_backup"]} for jid, det in player_details.items() if det.get("pitching_backup") and det["pitching_backup"].get("ip_real", 0) > 0]
+                    if rebuilt_pic:
+                        td["pitching"] = rebuilt_pic
+                        print(f"       [BACKUP jugador.php] Pitcheo de Relámpago T{c_info['number']}: {len(rebuilt_pic)} pitchers.")
+                if not td["defense"]:
+                    rebuilt_def = []
+                    for jid, det in player_details.items():
+                        pos_rows = det.get("positions") or []
+                        if pos_rows:
+                            jj_d = sum(x.get("jj", 0) for x in pos_rows)
+                            po_d = sum(x.get("po", 0) for x in pos_rows)
+                            as_d = sum(x.get("as", 0) for x in pos_rows)
+                            e_d = sum(x.get("e", 0) for x in pos_rows)
+                            dp_d = sum(x.get("dp", 0) for x in pos_rows)
+                            ej_d = round(sum(float(x.get("ej", 0) or 0) for x in pos_rows), 2)
+                            lt_d = po_d + as_d + e_d
+                            pdf_d = round((po_d + as_d) / lt_d, 3) if lt_d > 0 else 0.0
+                            rebuilt_def.append({"jug_id": jid, "name": det["name"], "pos": pos_rows[0]["pos"], "jj": jj_d, "po": po_d, "as": as_d, "e": e_d, "dp": dp_d, "ej": ej_d, "pdf": pdf_d})
+                    if rebuilt_def:
+                        td["defense"] = rebuilt_def
+                        print(f"       [BACKUP jugador.php] Defensiva de Relámpago T{c_info['number']}: {len(rebuilt_def)} defensores.")
 
-        # RECONSTRUCCIÓN AUTOMÁTICA PARA RIVALES DESDE lideresV1.php si estadisticasequipo.php vino vacío!
-        rivals_missing_bat = [tn for tn, td in teams_data.items() if not td["is_ours"] and not td["batting"]]
-        if rivals_missing_bat:
-            lid_bat_html = fetch_html(f"lideresV1.php?lig={lig_id}&cam={cam_id}&dep=AVE", referer=cam_url_full)
-            lid_pic_html = fetch_html(f"lideresV1.php?lig={lig_id}&cam={cam_id}&dep=EFE", referer=cam_url_full)
-            lid_bat_by_t = parse_lideres_table(lid_bat_html, "bat")
-            lid_pic_by_t = parse_lideres_table(lid_pic_html, "pic")
-            filled_r = 0
-            for tn, td in teams_data.items():
-                tk = norm_text(tn)
-                if not td["batting"] and tk in lid_bat_by_t:
-                    td["batting"] = lid_bat_by_t[tk]
-                    filled_r += 1
-                if not td["pitching"] and tk in lid_pic_by_t:
-                    td["pitching"] = lid_pic_by_t[tk]
-            if filled_r:
-                print(f"       [BACKUP lideresV1.php] Estadísticas de {filled_r} equipos recuperadas desde Líderes.")
+            # Respaldo para rivales desde lideresV1.php
+            rivals_missing_bat = [tn for tn, td in teams_data.items() if not td["is_ours"] and not td["batting"]]
+            if rivals_missing_bat and torneo_tiene_juegos:
+                lid_bat_url = f"lideresV1.php?lig={lig_id}&cam={cam_id}&dep=AVE"
+                lid_pic_url = f"lideresV1.php?lig={lig_id}&cam={cam_id}&dep=EFE"
+                lid_bat_html = browser.get(lid_bat_url, wait_ms=700) if (use_browser_for_stats and browser.available) else fetch_html(lid_bat_url, referer=cam_url_full)
+                lid_pic_html = browser.get(lid_pic_url, wait_ms=700) if (use_browser_for_stats and browser.available) else fetch_html(lid_pic_url, referer=cam_url_full)
+                lid_bat_by_t = parse_lideres_table(lid_bat_html, "bat")
+                lid_pic_by_t = parse_lideres_table(lid_pic_html, "pic")
+                filled_r = 0
+                for tn, td in teams_data.items():
+                    tk = norm_text(tn)
+                    if not td["batting"] and tk in lid_bat_by_t:
+                        td["batting"] = lid_bat_by_t[tk]
+                        filled_r += 1
+                    if not td["pitching"] and tk in lid_pic_by_t:
+                        td["pitching"] = lid_pic_by_t[tk]
+                if filled_r:
+                    print(f"       [BACKUP lideresV1.php] Estadísticas de {filled_r} equipos recuperadas desde Líderes.")
 
-        tournaments_out.append({
-            "cam_id": cam_id, "number": c_info["number"], "name": c_info["name"], "squad": c_info["squad"],
-            "standings_blocks": standings_blocks, "games": games,
-            "teams": teams_data, "relampago_player_details": player_details,
-        })
+            tournaments_out.append({
+                "cam_id": cam_id, "number": c_info["number"], "name": c_info["name"], "squad": c_info["squad"],
+                "standings_blocks": standings_blocks, "games": games,
+                "teams": teams_data, "relampago_player_details": player_details,
+            })
+    finally:
+        browser.close()
 
     snapshot = {
         "extracted_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
@@ -1164,7 +1335,8 @@ def run_extraction(config_path: Path, output_path: Path) -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[OK] Snapshot v4 guardado en {output_path} ({len(tournaments_out)} torneos de Relámpago).")
+    total_bat = snapshot_has_real_stats(snapshot)
+    print(f"[OK] Snapshot v6 guardado en {output_path} ({len(tournaments_out)} torneos, {total_bat} bateadores totales).")
 
 
 if __name__ == "__main__":
