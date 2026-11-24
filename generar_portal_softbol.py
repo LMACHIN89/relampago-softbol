@@ -183,6 +183,8 @@ def load_manual_positions(cfg: Dict[str, Any], alias_map: Dict[str, str]) -> Dic
             is_p_raw = norm_text(r.get("es_pitcher") or r.get("pitcher") or "")
             is_pitcher = is_p_raw in ("si", "yes", "1", "true", "x") or pos1 == "P" or pos2 == "P"
             sq_list = parse_squad_set(r.get("equipo") or "")
+            est_raw = norm_text(r.get("estado") or r.get("status") or r.get("activo") or "activo")
+            is_excluded = est_raw in ("baja", "inactivo", "eliminado", "no", "retirado", "0", "false")
             out[k] = {
                 "name": name,
                 "squad": format_squad_label(sq_list),
@@ -192,6 +194,7 @@ def load_manual_positions(cfg: Dict[str, Any], alias_map: Dict[str, str]) -> Dic
                 "pos3": pos3,
                 "is_pitcher": is_pitcher,
                 "pitcher_role": r.get("rol_pitcher") or r.get("rol") or "",
+                "excluded": is_excluded,
             }
         if out:
             print(f"[INFO] Posiciones fijas cargadas desde '{csv_path}' ({len(out)} jugadores, enc={used_enc}, sep='{delimiter}').")
@@ -400,6 +403,16 @@ def build_view_for_tournaments(
         if matches_sq and mk not in our_display_names:
             our_display_names[mk] = mv["name"]
 
+    # Jugadores dados de baja / excluidos (desde config_softbol.json o estado=Baja en CSV)
+    excluded_keys = set()
+    for ex_name in (cfg.get("excluded_players") or []):
+        ck, _ = canonical_player_key_and_name(ex_name, alias_map)
+        if ck:
+            excluded_keys.add(ck)
+    for mk, mv in manual_pos.items():
+        if mv.get("excluded"):
+            excluded_keys.add(mk)
+
     # Construir roster consolidado de Relámpago respetando la columna `equipo` del CSV
     all_our_keys = set(our_display_names.keys()) | set(our_bat_by_p.keys()) | set(our_pic_by_p.keys()) | set(our_def_by_p.keys())
     relampago_roster: List[Dict[str, Any]] = []
@@ -407,6 +420,7 @@ def build_view_for_tournaments(
     for pk in sorted(all_our_keys):
         mp = manual_pos.get(pk, {})
         csv_squads = mp.get("squads") or []
+        is_excluded = pk in excluded_keys
         # Si la plantilla CSV asignó explícitamente este jugador a otro equipo (ej. solo 'B'),
         # respetarlo al filtrar por Equipo A o Equipo B:
         if squad_tag in ("A", "B") and csv_squads and (squad_tag not in csv_squads):
@@ -454,6 +468,7 @@ def build_view_for_tournaments(
         is_dual = ("A" in eff_squads and "B" in eff_squads) or (not csv_squads and pk in dual_squad_players)
         relampago_roster.append({
             "name": disp_name,
+            "excluded": is_excluded,
             "assigned_squad": format_squad_label(eff_squads),
             "dual_squad": is_dual,
             "batting": bat,
@@ -642,8 +657,16 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
     .pitcher-top {{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px; flex-wrap:wrap; }}
     .rival-alert {{ background:var(--gold-soft); border:1px solid #eab308; color:#713f12; border-radius:10px; padding:10px 14px; font-size:13px; margin-bottom:12px; }}
 
-    .lineup-row {{ display:grid; grid-template-columns:30px 1.2fr 96px 1fr; gap:8px; align-items:center; background:#fff; border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin-bottom:6px; font-size:12.5px; }}
+    .lineup-row {{ display:grid; grid-template-columns:28px 1.35fr 46px 60px 1fr; gap:6px; align-items:center; background:#fff; border:1px solid var(--border); border-radius:8px; padding:7px 9px; margin-bottom:6px; font-size:12.5px; }}
     .ord-num {{ width:26px; height:26px; border-radius:7px; background:var(--navy); color:var(--gold); font-weight:900; display:flex; align-items:center; justify-content:center; font-size:12px; }}
+    .lu-sel {{ width:100%; border:1px solid var(--border-strong); border-radius:6px; padding:4px 6px; font-size:12.5px; font-weight:700; color:var(--navy); background:#fff; font-family:var(--font); }}
+    .lu-arrows {{ display:inline-flex; gap:3px; justify-content:center; }}
+    .arr-btn {{ border:1px solid var(--border-strong); background:var(--surface-alt); color:var(--navy); width:24px; height:24px; border-radius:6px; font-size:11px; font-weight:900; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }}
+    .arr-btn:hover:not(:disabled) {{ background:var(--navy); color:var(--gold); border-color:var(--navy); }}
+    .arr-btn:disabled {{ opacity:0.32; cursor:default; }}
+    .btn-red {{ background:var(--red-soft); border-color:#fca5a5; color:var(--red); }}
+    .btn-red:hover {{ background:var(--red); border-color:var(--red); color:#fff; }}
+    .lu-bar {{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:10px; padding:8px 10px; background:#fff; border:1px solid var(--border); border-radius:8px; font-size:12px; }}
     .role-tag {{ font-size:10.5px; font-weight:800; padding:2px 7px; border-radius:999px; background:var(--navy-soft); color:var(--navy); text-align:center; white-space:nowrap; }}
     .role-tag.power {{ background:var(--gold-soft); color:#854d0e; }}
     .role-tag.lead {{ background:var(--green-soft); color:var(--green); }}
@@ -707,8 +730,11 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
       let showPosEditor = false;
       let unavailableSet = new Set();
       let customDefMap = {{}};
+      let syncLineupWithDef = true;
+      let customLineupNames = null; // Array de nombres en el orden editado manualmente (null = auto)
+      let extraBatters = new Set(); // Bateadores extra (BD/BE) agregados sobre el cuadro defensivo
 
-      // Overrides locales de posiciones fijas y pitchers (se combinan con posiciones_relampago.csv)
+      // Overrides locales de posiciones fijas, pitchers y bajas (se combinan con posiciones_relampago.csv)
       const STORAGE_KEY = "relampago_pos_overrides_v1";
       let localPosOverrides = {{}};
       try {{ localPosOverrides = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{{}}"); }} catch(e) {{}}
@@ -724,9 +750,10 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
           const isP = (ov.is_pitcher !== undefined) ? ov.is_pitcher : (p.is_pitcher || f1 === "P" || f2 === "P");
           const pRole = (ov.pitcher_role !== undefined) ? ov.pitcher_role : (p.pitcher_role || "");
           const eqVal = (ov.equipo !== undefined) ? ov.equipo : (p.assigned_squad || "");
+          const excl = (ov.excluded !== undefined) ? Boolean(ov.excluded) : Boolean(p.excluded);
           const prim = f1 || p.primary_pos || (isP ? "P" : "UTIL");
           const sec = f2 || p.secondary_pos || "";
-          return {{ ...p, assigned_squad: eqVal, dual_squad: eqVal === "A y B" || p.dual_squad, fixed_pos1: f1, fixed_pos2: f2, primary_pos: prim, secondary_pos: sec, is_pitcher: isP, pitcher_role: pRole }};
+          return {{ ...p, excluded: excl, assigned_squad: eqVal, dual_squad: eqVal === "A y B" || p.dual_squad, fixed_pos1: f1, fixed_pos2: f2, primary_pos: prim, secondary_pos: sec, is_pitcher: isP, pitcher_role: pRole }};
         }});
       }}
 
@@ -878,16 +905,17 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
         `;
       }}
 
-      function downloadPositionsCSV(roster, squadLabel) {{
-        const header = "jugador,equipo,pos_primaria,pos_secundaria,pos_terciaria,es_pitcher,rol_pitcher";
-        const lines = roster.map(p => {{
+      function downloadPositionsCSV(allRoster, squadLabel) {{
+        const header = "jugador,equipo,pos_primaria,pos_secundaria,pos_terciaria,es_pitcher,rol_pitcher,estado";
+        const lines = allRoster.map(p => {{
           const eq = p.assigned_squad || (p.dual_squad ? "A y B" : (squadLabel === "ALL" ? "A y B" : squadLabel));
           const p1 = p.fixed_pos1 || (p.primary_pos !== "UTIL" ? p.primary_pos : "");
           const p2 = p.fixed_pos2 || p.secondary_pos || "";
           const p3 = p.fixed_pos3 || "";
           const isP = p.is_pitcher ? "SI" : "NO";
           const rol = p.pitcher_role || "";
-          return `"${{p.name.replace(/"/g, '""')}}","${{eq}}","${{p1}}","${{p2}}","${{p3}}","${{isP}}","${{rol}}"`;
+          const est = p.excluded ? "Baja" : "Activo";
+          return `"${{p.name.replace(/"/g, '""')}}","${{eq}}","${{p1}}","${{p2}}","${{p3}}","${{isP}}","${{rol}}","${{est}}"`;
         }});
         const csv = [header, ...lines].join("\\n");
         const blob = new Blob([csv], {{ type: "text/csv;charset=utf-8;" }});
@@ -902,16 +930,70 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
         if (!squadViews.some(v => v.id === activeViewId)) activeViewId = squadViews[0]?.id || data.view_index[0].id;
         const view = data.views[activeViewId];
         const k = view.our_kpis;
-        const roster = enrichRosterWithLocal(view.relampago_roster || []);
+        const fullRoster = enrichRosterWithLocal(view.relampago_roster || []);
+        const roster = fullRoster.filter(p => !p.excluded);
+        const excludedRoster = fullRoster.filter(p => p.excluded);
         const rivals = view.rivals_profiles || [];
         if (!rivals.some(r => r.name === selectedRivalName)) selectedRivalName = rivals[0]?.name || "";
         const curRival = rivals.find(r => r.name === selectedRivalName) || null;
         const availPlayers = roster.filter(p => !unavailableSet.has(p.name));
+        const playerByName = Object.fromEntries(availPlayers.map(p => [p.name, p]));
 
         const pitcherRecs = recommendPitchers(availPlayers, curRival);
         const topPitcherName = pitcherRecs[0]?.player?.name || "";
-        const lineup = buildOffensiveLineup(availPlayers);
+        // 1) Calcular primero la Defensa (Cuadro)
         const defense = buildDefensiveAlignment(availPlayers, topPitcherName);
+        const defPosByPlayer = {{}};
+        defense.order.forEach(pos => {{
+          const nm = defense.map[pos];
+          if (nm && nm !== "Por definir") defPosByPlayer[nm] = pos;
+        }});
+
+        // 2) Pool de bateadores en función del cuadro defensivo (+ bateadores extra BD/BE)
+        const defPlayerNames = new Set(Object.keys(defPosByPlayer));
+        const benchPlayers = availPlayers.filter(p => !defPlayerNames.has(p.name) && !extraBatters.has(p.name));
+        const battingPool = syncLineupWithDef
+          ? availPlayers.filter(p => defPlayerNames.has(p.name) || extraBatters.has(p.name))
+          : availPlayers;
+        const autoLineup = buildOffensiveLineup(battingPool);
+
+        // 3) Mantener orden editado por el coach sincronizado con los cambios del cuadro defensivo
+        let finalOrderNames = autoLineup.map(s => s.p.name);
+        if (Array.isArray(customLineupNames)) {{
+          const poolSet = new Set(battingPool.map(p => p.name));
+          const kept = customLineupNames.filter(n => poolSet.has(n));
+          const keptSet = new Set(kept);
+          const newlyAdded = autoLineup.map(s => s.p.name).filter(n => !keptSet.has(n));
+          // Si un jugador salió del cuadro y entró otro en su lugar, ocupar su mismo turno al bate
+          const merged = [];
+          let addIdx = 0;
+          customLineupNames.forEach(n => {{
+            if (poolSet.has(n)) {{
+              if (!merged.includes(n)) merged.push(n);
+            }} else if (addIdx < newlyAdded.length) {{
+              merged.push(newlyAdded[addIdx++]);
+            }}
+          }});
+          while (addIdx < newlyAdded.length) merged.push(newlyAdded[addIdx++]);
+          finalOrderNames = merged;
+          customLineupNames = merged;
+        }}
+
+        const ROLE_LABELS = [
+          {{ lbl: "1° Leadoff", cls: "lead" }}, {{ lbl: "2° Contacto", cls: "lead" }},
+          {{ lbl: "3° Mejor Bate", cls: "power" }}, {{ lbl: "4° Cleanup", cls: "power" }},
+          {{ lbl: "5° Poder", cls: "power" }}, {{ lbl: "6° Producción", cls: "" }},
+          {{ lbl: "7° Contacto", cls: "" }}, {{ lbl: "8° Soporte", cls: "" }},
+          {{ lbl: "9° Puente", cls: "" }}, {{ lbl: "10° Contacto", cls: "" }},
+          {{ lbl: "11° 2do Leadoff", cls: "lead" }},
+        ];
+        const lineup = finalOrderNames.map((nm, idx) => {{
+          const p = playerByName[nm];
+          if (!p) return null;
+          const fieldPos = defPosByPlayer[nm] || "BD";
+          const role = ROLE_LABELS[idx] || {{ lbl: "BE / BD", cls: "" }};
+          return {{ p, order: idx + 1, fieldPos, role }};
+        }}).filter(Boolean);
         const qSuffix = `?view=${{encodeURIComponent(activeViewId)}}`;
 
         // Filtrado de tablas completas de Relámpago
@@ -1050,7 +1132,7 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
                   <button class="btn btn-green" id="btn-dl-csv">💾 Descargar posiciones_relampago.csv</button>
                 </div>
                 <div class="tw"><table>
-                  <thead><tr><th>Jugador</th><th>Equipo</th><th>Posición Fija #1</th><th>Posición #2</th><th>¿Es Pitcher?</th><th>Rol de Pitcheo</th></tr></thead>
+                  <thead><tr><th>Jugador</th><th>Equipo</th><th>Posición Fija #1</th><th>Posición #2</th><th>¿Pitcher?</th><th>Rol</th><th class="center">Acción</th></tr></thead>
                   <tbody>
                     ${{roster.map(p => `
                       <tr>
@@ -1060,10 +1142,19 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
                         <td><select class="ed-sel" data-ed-p2="${{esc(p.name)}}">${{ALL_POS.map(pos => `<option value="${{pos}}" ${{p.fixed_pos2 === pos ? "selected" : ""}}>${{pos || "—"}}</option>`).join("")}}</select></td>
                         <td><input type="checkbox" data-ed-pic="${{esc(p.name)}}" ${{p.is_pitcher ? "checked" : ""}} /> Sí</td>
                         <td><select class="ed-sel" data-ed-role="${{esc(p.name)}}"><option value="">—</option><option value="Abridor" ${{p.pitcher_role==="Abridor"?"selected":""}}>Abridor</option><option value="Relevo" ${{p.pitcher_role==="Relevo"?"selected":""}}>Relevo</option><option value="Cerrador" ${{p.pitcher_role==="Cerrador"?"selected":""}}>Cerrador</option></select></td>
+                        <td class="center"><button type="button" class="btn btn-red" style="padding:4px 8px;font-size:11px" data-ed-rm="${{esc(p.name)}}" title="Eliminar jugador que ya no forma parte del equipo">🗑️ Quitar</button></td>
                       </tr>
                     `).join("")}}
                   </tbody>
                 </table></div>
+                ${{excludedRoster.length ? `
+                  <div style="margin-top:12px;padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-size:12px">
+                    <strong style="color:var(--red)">🚫 Jugadores dados de baja (${{excludedRoster.length}}) — excluidos del equipo y lineups:</strong>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+                      ${{excludedRoster.map(p => `<span style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #fca5a5;border-radius:6px;padding:3px 8px">${{esc(p.name)}} <button type="button" class="btn" style="padding:2px 6px;font-size:10.5px" data-ed-restore="${{esc(p.name)}}">↩️ Restaurar</button></span>`).join("")}}
+                    </div>
+                  </div>
+                ` : ""}}
               </div>
             ` : ""}}
 
@@ -1108,15 +1199,39 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
 
             <div class="three-col">
               <div class="subcard">
-                <h3>🏏 Lineup Ofensivo Sugerido (1° al 11°) <span style="font-size:11.5px;color:var(--light);font-weight:600">OBP / SLG / OPS</span></h3>
-                ${{lineup.map(slot => {{
+                <h3>🏏 Orden al Bate (${{lineup.length}}) <span style="font-size:11.5px;color:var(--light);font-weight:600">Editable · Sincronizado con Defensa</span></h3>
+                <div class="lu-bar">
+                  <label style="display:inline-flex;align-items:center;gap:6px;font-weight:700;color:var(--navy);cursor:pointer">
+                    <input type="checkbox" id="chk-sync-def" ${{syncLineupWithDef ? "checked" : ""}} /> 🔗 Solo los del cuadro defensivo
+                  </label>
+                  <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                    ${{syncLineupWithDef && benchPlayers.length ? `
+                      <select class="ed-sel" id="sel-add-be">
+                        <option value="">➕ Agregar BD/BE...</option>
+                        ${{benchPlayers.map(p => `<option value="${{esc(p.name)}}">${{esc(p.name)}} (AVG ${{fmtRate(p.batting.avg)}})</option>`).join("")}}
+                      </select>
+                    ` : ""}}
+                    <button type="button" class="btn" id="btn-auto-lineup" style="padding:4px 9px;font-size:11.5px">🔄 Auto-ordenar</button>
+                  </div>
+                </div>
+                ${{lineup.map((slot, idx) => {{
                   const b = slot.p.batting;
+                  const isExtra = slot.fieldPos === "BD" && syncLineupWithDef;
                   return `
                     <div class="lineup-row">
                       <div class="ord-num">${{slot.order}}</div>
-                      <div><strong>${{esc(slot.p.name)}}</strong> <span style="font-size:11px;color:var(--light)">(${{esc(slot.p.primary_pos)}})</span></div>
-                      <span class="role-tag ${{slot.role.cls}}">${{esc(slot.role.lbl)}}</span>
-                      <div class="stat-mono">AVG ${{fmtRate(b.avg)}} · OBP ${{fmtRate(b.obp)}} · OPS ${{fmtRate(b.ops)}}</div>
+                      <select class="lu-sel" data-lu-idx="${{idx}}">
+                        ${{lineup.map(opt => `<option value="${{esc(opt.p.name)}}" ${{opt.p.name === slot.p.name ? "selected" : ""}}>${{esc(opt.p.name)}}</option>`).join("")}}
+                      </select>
+                      <span class="pos-b" title="Posición actual en el cuadro defensivo">${{esc(slot.fieldPos)}}</span>
+                      <div class="lu-arrows">
+                        <button type="button" class="arr-btn" data-lu-move="${{idx}}" data-lu-dir="-1" ${{idx === 0 ? "disabled" : ""}} title="Subir en el orden">▲</button>
+                        <button type="button" class="arr-btn" data-lu-move="${{idx}}" data-lu-dir="1" ${{idx === lineup.length - 1 ? "disabled" : ""}} title="Bajar en el orden">▼</button>
+                      </div>
+                      <div class="stat-mono">
+                        AVG <strong>${{fmtRate(b.avg)}}</strong> · OPS ${{fmtRate(b.ops)}}
+                        ${{isExtra ? ` <button type="button" class="arr-btn" style="width:20px;height:20px;color:var(--red)" data-rm-be="${{esc(slot.p.name)}}" title="Quitar Bateador Extra">✕</button>` : ""}}
+                      </div>
                     </div>
                   `;
                 }}).join("") || `<p style="font-size:13px;color:var(--light)">Activa jugadores disponibles arriba.</p>`}}
@@ -1207,20 +1322,71 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
 
         // Wire Listeners
         document.querySelectorAll("#squad-pills .pill-btn").forEach(b => b.addEventListener("click", () => {{
-          activeSquad = b.dataset.sq; activeViewId = getViewsForSquad(activeSquad)[0]?.id || activeViewId; customDefMap = {{}}; render();
+          activeSquad = b.dataset.sq; activeViewId = getViewsForSquad(activeSquad)[0]?.id || activeViewId; customDefMap = {{}}; customLineupNames = null; extraBatters.clear(); render();
         }}));
         document.querySelectorAll("#view-pills .pill-btn").forEach(b => b.addEventListener("click", () => {{
-          activeViewId = b.dataset.vid; customDefMap = {{}}; render();
+          activeViewId = b.dataset.vid; customDefMap = {{}}; customLineupNames = null; extraBatters.clear(); render();
         }}));
         document.getElementById("rival-select").addEventListener("change", (e) => {{ selectedRivalName = e.target.value; render(); }});
         document.getElementById("btn-toggle-editor").addEventListener("click", () => {{ showPosEditor = !showPosEditor; render(); }});
-        document.getElementById("btn-reset-def").addEventListener("click", () => {{ customDefMap = {{}}; render(); }});
+        document.getElementById("btn-reset-def").addEventListener("click", () => {{ customDefMap = {{}}; extraBatters.clear(); render(); }});
         document.getElementById("btn-all-on").addEventListener("click", () => {{ unavailableSet.clear(); render(); }});
         document.querySelectorAll("#avail-grid .avail-chip").forEach(ch => ch.addEventListener("click", () => {{
           const pn = ch.dataset.pname; if (unavailableSet.has(pn)) unavailableSet.delete(pn); else unavailableSet.add(pn); render();
         }}));
         document.querySelectorAll("[data-def-pos]").forEach(sel => sel.addEventListener("change", (e) => {{
-          customDefMap[e.target.dataset.defPos] = e.target.value; render();
+          const pos = e.target.dataset.defPos;
+          const chosen = e.target.value;
+          // Si ese jugador estaba en otra posición manual, liberarla para evitar duplicados
+          if (chosen && chosen !== "Por definir") {{
+            Object.keys(customDefMap).forEach(k => {{ if (customDefMap[k] === chosen) delete customDefMap[k]; }});
+            extraBatters.delete(chosen);
+          }}
+          customDefMap[pos] = chosen;
+          render();
+        }}));
+        // Listeners de Orden al Bate editable
+        const syncChk = document.getElementById("chk-sync-def");
+        if (syncChk) syncChk.addEventListener("change", (e) => {{ syncLineupWithDef = e.target.checked; render(); }});
+        const btnAutoLu = document.getElementById("btn-auto-lineup");
+        if (btnAutoLu) btnAutoLu.addEventListener("click", () => {{ customLineupNames = null; render(); }});
+        const selBe = document.getElementById("sel-add-be");
+        if (selBe) selBe.addEventListener("change", (e) => {{
+          if (e.target.value) {{
+            extraBatters.add(e.target.value);
+            if (Array.isArray(customLineupNames) && !customLineupNames.includes(e.target.value)) {{
+              customLineupNames.push(e.target.value);
+            }}
+            render();
+          }}
+        }});
+        document.querySelectorAll("[data-rm-be]").forEach(b => b.addEventListener("click", () => {{
+          extraBatters.delete(b.dataset.rmBe);
+          render();
+        }}));
+        document.querySelectorAll("[data-lu-idx]").forEach(sel => sel.addEventListener("change", (e) => {{
+          const idx = parseInt(e.target.dataset.luIdx, 10);
+          const chosen = e.target.value;
+          const arr = lineup.map(s => s.p.name);
+          const oldIdx = arr.indexOf(chosen);
+          if (oldIdx >= 0 && oldIdx !== idx) {{
+            const tmp = arr[idx];
+            arr[idx] = chosen;
+            arr[oldIdx] = tmp;
+            customLineupNames = arr;
+            render();
+          }}
+        }}));
+        document.querySelectorAll("[data-lu-move]").forEach(btn => btn.addEventListener("click", () => {{
+          const idx = parseInt(btn.dataset.luMove, 10);
+          const dir = parseInt(btn.dataset.luDir, 10);
+          const target = idx + dir;
+          const arr = lineup.map(s => s.p.name);
+          if (target >= 0 && target < arr.length) {{
+            const tmp = arr[idx]; arr[idx] = arr[target]; arr[target] = tmp;
+            customLineupNames = arr;
+            render();
+          }}
         }}));
         document.querySelectorAll("#stats-tabs .stab").forEach(b => b.addEventListener("click", () => {{
           activeStatsTab = b.dataset.st; render();
@@ -1245,7 +1411,16 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
           document.querySelectorAll("[data-ed-role]").forEach(s => s.addEventListener("change", (e) => {{
             ensureOv(e.target.dataset.edRole).pitcher_role = e.target.value; saveLocalOverrides(); render();
           }}));
-          document.getElementById("btn-dl-csv").addEventListener("click", () => downloadPositionsCSV(roster, view.squad));
+          document.querySelectorAll("[data-ed-rm]").forEach(b => b.addEventListener("click", () => {{
+            ensureOv(b.dataset.edRm).excluded = true;
+            extraBatters.delete(b.dataset.edRm);
+            saveLocalOverrides(); render();
+          }}));
+          document.querySelectorAll("[data-ed-restore]").forEach(b => b.addEventListener("click", () => {{
+            ensureOv(b.dataset.edRestore).excluded = false;
+            saveLocalOverrides(); render();
+          }}));
+          document.getElementById("btn-dl-csv").addEventListener("click", () => downloadPositionsCSV(fullRoster, view.squad));
         }}
 
         document.getElementById("btn-copy-wa").addEventListener("click", () => {{
@@ -1255,7 +1430,7 @@ def render_main_portal(portal_data: Dict[str, Any]) -> str:
             `⚾ *Pitcher sugerido:* ${{topPitcherName || "Por definir"}}`,
             "",
             "*🏏 LINEUP OFENSIVO:*",
-            ...lineup.slice(0, 11).map(s => `${{s.order}}. ${{s.p.name}} (${{s.role.lbl}} · AVG ${{fmtRate(s.p.batting.avg)}})`),
+            ...lineup.map(s => `${{s.order}}. ${{s.p.name}} (${{s.fieldPos}} · AVG ${{fmtRate(s.p.batting.avg)}})`),
             "",
             "*🧤 DEFENSA:*",
             ...defense.order.map(pos => `• *${{pos}}:* ${{defense.map[pos]}}`),
@@ -1487,6 +1662,16 @@ def main() -> None:
 
     # Garantizar logo siempre presente en docs/logo_relampago.png
     ensure_logo_in_docs(cfg, out_dir)
+
+    # Generar docs/tesoreria_config.js si se configuró tesoreria_url en config_softbol.json
+    tes_cfg = {
+        "api_url": str(cfg.get("tesoreria_url") or "").strip(),
+        "whatsapp_tesorero": str(cfg.get("whatsapp_tesorero") or "").strip(),
+    }
+    (out_dir / "tesoreria_config.js").write_text(
+        f"window.TESORERIA_CONFIG = {json.dumps(tes_cfg, ensure_ascii=False)};\n",
+        encoding="utf-8",
+    )
 
     tournaments = snapshot.get("tournaments", [])
     if not tournaments:
