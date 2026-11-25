@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tesorería y Ficha Oficial — Relámpago del Caribe</title>
+  <style>
+    :root {
+      --navy:#0e2644; --navy-mid:#133150; --navy-soft:#e6eef7;
+      --gold:#f0d72b; --gold-dark:#b48a04; --gold-soft:#fef9c3;
+      --bg:#f3f5f8; --surface:#ffffff; --surface-alt:#f8fafc;
+      --border:#e2e8f0; --border-strong:#cbd5e1;
+      --text:#0f172a; --muted:#475569; --light:#64748b;
+      --green:#15803d; --green-soft:#dcfce7;
+      --red:#dc2626; --red-soft:#fee2e2;
+      --amber:#b45309; --amber-soft:#fef3c7;
+      --shadow:0 2px 6px rgba(14,38,68,0.06), 0 6px 18px rgba(14,38,68,0.05);
+      --font:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      --mono:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:var(--font); background:var(--bg); color:var(--text); line-height:1.5; }
+    .wrap { max-width:1180px; margin:0 auto; padding:16px 16px 72px; }
+
+    .top-bar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+    .nav-link { text-decoration:none; color:var(--navy); background:#fff; border:1px solid var(--border-strong); padding:7px 13px; border-radius:9px; font-size:12.5px; font-weight:800; display:inline-flex; align-items:center; gap:6px; }
+    .nav-link:hover { background:var(--navy-soft); border-color:var(--navy); }
+
+    .hero { background:linear-gradient(135deg,#091a30 0%,#133150 65%,#1a426b 100%); color:#fff; border-radius:18px; padding:22px 24px; margin-bottom:16px; border-bottom:4px solid var(--gold); box-shadow:0 12px 30px rgba(9,26,48,0.22); }
+    .hero-top { display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin-bottom:16px; }
+    .logo-wrap { background:rgba(255,255,255,0.96); border-radius:14px; padding:7px 11px; border:2px solid var(--gold); flex-shrink:0; }
+    .logo-wrap img { height:64px; width:auto; display:block; }
+    .slogan-pill { display:inline-block; background:var(--gold); color:var(--navy); font-size:11px; font-weight:900; letter-spacing:0.8px; padding:2px 10px; border-radius:999px; margin-bottom:5px; }
+    .hero h1 { font-size:clamp(21px,3vw,28px); font-weight:900; line-height:1.15; }
+    .hero-sub { color:#cbd5e1; font-size:13px; margin-top:3px; }
+    .kpi-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
+    .kpi { background:rgba(255,255,255,0.09); border:1px solid rgba(240,215,43,0.28); border-radius:10px; padding:11px 13px; }
+    .kpi-v { font-size:21px; font-weight:800; color:#fff; font-variant-numeric:tabular-nums; }
+    .kpi-v.gold { color:var(--gold); }
+    .kpi-v.red { color:#fca5a5; }
+    .kpi-v.green { color:#86efac; }
+    .kpi-l { font-size:11.5px; color:#cbd5e1; }
+
+    .tabs-bar { position:sticky; top:8px; z-index:50; background:rgba(255,255,255,0.97); backdrop-filter:blur(10px); border:1px solid var(--border-strong); border-radius:14px; padding:10px 14px; margin-bottom:18px; box-shadow:0 6px 20px rgba(14,38,68,0.1); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+    .tabs { display:flex; gap:6px; flex-wrap:wrap; }
+    .tab-btn { border:1px solid var(--border-strong); background:var(--surface-alt); color:var(--muted); padding:8px 14px; border-radius:10px; font-size:13px; font-weight:800; cursor:pointer; transition:all .15s; }
+    .tab-btn:hover { border-color:var(--navy); color:var(--navy); background:var(--navy-soft); }
+    .tab-btn.active { background:var(--navy); color:var(--gold); border-color:var(--navy); }
+    .tab-btn .cnt { display:inline-block; background:var(--red); color:#fff; font-size:10.5px; padding:0 6px; border-radius:999px; margin-left:4px; }
+
+    .squad-pills { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+    .sq-btn { border:1px solid var(--border-strong); background:#fff; color:var(--muted); padding:6px 12px; border-radius:999px; font-size:12px; font-weight:800; cursor:pointer; }
+    .sq-btn.active { background:var(--gold); border-color:var(--gold-dark); color:var(--navy); }
+
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:20px; margin-bottom:18px; box-shadow:var(--shadow); }
+    .card h2 { font-size:18px; font-weight:900; color:var(--navy); margin-bottom:4px; }
+    .sub { font-size:12.5px; color:var(--light); margin-bottom:14px; }
+
+    .btn { border:1px solid var(--border-strong); background:#fff; color:var(--navy); padding:8px 14px; border-radius:9px; font-size:12.5px; font-weight:800; cursor:pointer; display:inline-flex; align-items:center; gap:6px; text-decoration:none; }
+    .btn:hover { background:var(--navy-soft); border-color:var(--navy); }
+    .btn-navy { background:var(--navy); border-color:var(--navy); color:#fff; }
+    .btn-navy:hover { background:#183a66; color:#fff; }
+    .btn-gold { background:var(--gold); border-color:var(--gold-dark); color:var(--navy); }
+    .btn-gold:hover { background:#e5c914; }
+    .btn-green { background:var(--green); border-color:var(--green); color:#fff; }
+    .btn-green:hover { background:#166534; }
+    .btn-red { background:var(--red); border-color:var(--red); color:#fff; }
+    .btn-sm { padding:5px 10px; font-size:11.5px; }
+
+    .inp, .sel, textarea { width:100%; padding:9px 12px; border:1px solid var(--border-strong); border-radius:9px; font-size:13.5px; font-family:var(--font); background:#fff; color:var(--text); }
+    .inp:focus, .sel:focus, textarea:focus { outline:none; border-color:var(--navy); box-shadow:0 0 0 3px rgba(14,38,68,0.1); }
+    label.fl { display:block; font-size:12px; font-weight:800; color:var(--navy); margin-bottom:4px; }
+    .form-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+    .form-grid-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+    .full { grid-column:1 / -1; }
+
+    .tw { overflow-x:auto; border:1px solid var(--border); border-radius:10px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th { background:var(--surface-alt); color:var(--muted); font-size:11px; text-transform:uppercase; padding:10px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
+    td { padding:9px 10px; border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums; }
+    tr:last-child td { border-bottom:none; }
+    tr.click-row { cursor:pointer; }
+    tr.click-row:hover td { background:#f8fafc; }
+    .num { text-align:right; }
+    .center { text-align:center; }
+
+    .badge { display:inline-block; font-size:11px; font-weight:800; padding:2px 8px; border-radius:999px; }
+    .b-debe { background:var(--red-soft); color:var(--red); }
+    .b-ok { background:var(--green-soft); color:var(--green); }
+    .b-favor { background:var(--navy-soft); color:var(--navy); }
+    .b-pend { background:var(--amber-soft); color:var(--amber); }
+    .b-gold { background:var(--gold); color:var(--navy); }
+
+    .detail-box { background:#f8fafc; padding:14px 16px; border-top:1px dashed var(--border-strong); }
+    .detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+
+    /* Player Ficha Cards */
+    .ficha-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(285px,1fr)); gap:12px; }
+    .ficha-card { background:#fff; border:1px solid var(--border); border-top:4px solid var(--navy); border-radius:12px; padding:14px; display:flex; flex-direction:column; gap:8px; }
+    .fc-top { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+    .jersey-num { min-width:38px; height:38px; border-radius:10px; background:var(--navy); color:var(--gold); font-family:var(--mono); font-weight:900; font-size:16px; display:flex; align-items:center; justify-content:center; border:2px solid var(--gold); flex-shrink:0; }
+    .fc-meta { font-size:12px; color:var(--muted); display:grid; grid-template-columns:1fr 1fr; gap:4px 10px; }
+
+    /* Checkboxes selector for expense distribution */
+    .check-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:6px; max-height:270px; overflow-y:auto; padding:10px; background:var(--surface-alt); border:1px solid var(--border); border-radius:10px; }
+    .chk-item { display:flex; align-items:center; gap:7px; padding:6px 8px; background:#fff; border:1px solid var(--border); border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; user-select:none; }
+    .chk-item.checked { border-color:var(--navy); background:var(--navy-soft); color:var(--navy); }
+
+    .alert { padding:12px 15px; border-radius:10px; font-size:13px; margin-bottom:14px; font-weight:600; }
+    .alert-ok { background:var(--green-soft); color:var(--green); border:1px solid #86efac; }
+    .alert-err { background:var(--red-soft); color:var(--red); border:1px solid #fca5a5; }
+    .alert-info { background:var(--gold-soft); color:#713f12; border:1px solid #eab308; }
+
+    .login-box { max-width:460px; margin:48px auto; background:#fff; border:1px solid var(--border); border-top:5px solid var(--gold); border-radius:16px; padding:28px; box-shadow:var(--shadow); text-align:center; }
+    .login-box img { height:76px; margin-bottom:12px; }
+    .login-box h1 { font-size:22px; font-weight:900; color:var(--navy); margin-bottom:6px; }
+    .login-box p { font-size:13px; color:var(--muted); margin-bottom:16px; }
+
+    .calc-box { background:var(--navy-soft); border:1px solid #c5d7ee; border-radius:10px; padding:11px 13px; }
+    .spinner { display:inline-block; width:16px; height:16px; border:2.5px solid rgba(14,38,68,0.2); border-top-color:var(--navy); border-radius:50%; animation:spin .7s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    @media (max-width:860px) {
+      .kpi-grid { grid-template-columns:repeat(2,1fr); }
+      .form-grid, .form-grid-3, .detail-grid { grid-template-columns:1fr; }
+    }
+    @media print {
+      .top-bar, .tabs-bar, .no-print { display:none !important; }
+      body { background:#fff; }
+      .card { box-shadow:none; border:none; padding:0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap" id="app"></div>
+  <script src="tesoreria_config.js"></script>
+  <script>
+    // =========================================================================
+    // CONFIGURACIÓN ÚNICA — PEGA AQUÍ TU URL DE GOOGLE APPS SCRIPT (/exec)
+    // (También puedes configurarla en config_softbol.json -> "tesoreria_url")
+    // =========================================================================
+    const DEFAULT_APPS_SCRIPT_URL = ""; // Ej: "https://script.google.com/macros/s/AKfycb.../exec"
+    const WHATSAPP_TESORERO = "";       // Opcional: Ej. "584123828202" (sin + ni espacios)
+
+    (function initTesoreria() {
+      const root = document.getElementById("app");
+      const esc = (s) => String(s ?? "").replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+      const fmtNum = (n, dec = 2) => {
+        const num = Number(n || 0);
+        const sign = num < 0 ? "-" : "";
+        const [intPart, decPart] = Math.abs(num).toFixed(dec).split(".");
+        const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+        return sign + grouped + (dec > 0 ? "," + decPart : "");
+      };
+      const fmtMoney = (n) => {
+        const num = Number(n || 0);
+        return (num < 0 ? "-$" : "$") + fmtNum(Math.abs(num), 2);
+      };
+      const norm = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+
+      const LS_URL = "relampago_tesoreria_url_v1";
+      const LS_KEY = "relampago_tesoreria_key_v1";
+      const CFG_EXT = (window.TESORERIA_CONFIG || {});
+      const FIXED_API_URL = (DEFAULT_APPS_SCRIPT_URL || CFG_EXT.api_url || "").trim();
+      const FIXED_WA = (WHATSAPP_TESORERO || CFG_EXT.whatsapp_tesorero || "").trim();
+
+      let apiUrl = FIXED_API_URL || localStorage.getItem(LS_URL) || "";
+      let showInactive = false;
+      let accessKey = localStorage.getItem(LS_KEY) || "";
+      let adminPin = "";
+
+      let state = null;       // Datos vivos desde Google Sheets
+      let loading = false;
+      let flash = null;       // { type: 'ok'|'err'|'info', msg: string, waUrl?: string }
+      let activeTab = "saldos"; // saldos | reportar | ficha | admin
+      let squadFilter = "ALL";  // ALL | A | B
+      let searchQ = "";
+      let expandedPlayer = "";
+      let fichaViewMode = "cards"; // cards | table
+
+      // Estado del creador de gastos (Admin)
+      let selectedForExpense = new Set();
+      let expenseConcept = "";
+      let expenseEquipo = "A";
+      let expenseTipo = "Dividir entre grupo";
+      let expenseMonto = "";
+      let expenseFecha = new Date().toISOString().slice(0, 10);
+      let expenseNotas = "";
+      let editingPlayer = null; // Objeto jugador en edición
+
+      function matchesSquad(equipoStr, filter) {
+        if (filter === "ALL") return true;
+        const s = norm(equipoStr || "A");
+        if (!s || s.includes("ambos") || s.includes("todos") || (s.includes("a") && s.includes("b"))) return true;
+        return filter === "A" ? s.includes("a") : s.includes("b");
+      }
+
+      function computeLedger() {
+        if (!state) return { rows: [], kpis: {}, pendingPayments: [] };
+        const map = {};
+        const ensure = (nombre, jugObj) => {
+          const k = norm(nombre);
+          if (!map[k]) {
+            map[k] = {
+              key: k,
+              nombre: jugObj ? jugObj.nombre : nombre,
+              equipo: jugObj ? jugObj.equipo : "A",
+              numero: jugObj ? jugObj.numero : "",
+              telefono: jugObj ? jugObj.telefono : "",
+              activo: jugObj ? (norm(jugObj.estado || "activo") !== "inactivo" && norm(jugObj.estado || "activo") !== "baja") : true,
+              cargosList: [],
+              pagosList: [],
+              totalCargos: 0,
+              totalAprobado: 0,
+              totalPendiente: 0,
+              saldo: 0,
+              estado: "Solvente",
+            };
+          }
+          return map[k];
+        };
+
+        (state.jugadores || []).forEach(j => ensure(j.nombre, j));
+        (state.cargos || []).forEach(c => {
+          const item = ensure(c.jugador, null);
+          item.cargosList.push(c);
+          item.totalCargos += Number(c.monto_usd || 0);
+        });
+        const pendingPayments = [];
+        (state.pagos || []).forEach(p => {
+          const item = ensure(p.jugador, null);
+          item.pagosList.push(p);
+          const est = norm(p.estado);
+          if (est === "aprobado") item.totalAprobado += Number(p.monto_usd || 0);
+          else if (est === "pendiente") {
+            item.totalPendiente += Number(p.monto_usd || 0);
+            pendingPayments.push(p);
+          }
+        });
+
+        let allRows = Object.values(map).map(r => {
+          r.totalCargos = Math.round(r.totalCargos * 100) / 100;
+          r.totalAprobado = Math.round(r.totalAprobado * 100) / 100;
+          r.totalPendiente = Math.round(r.totalPendiente * 100) / 100;
+          r.saldo = Math.round((r.totalAprobado - r.totalCargos) * 100) / 100;
+          if (r.saldo < -0.05) r.estado = "Debe";
+          else if (r.saldo > 0.50) r.estado = "A Favor";
+          else r.estado = "Solvente";
+          return r;
+        });
+
+        const filtered = allRows.filter(r => {
+          if (!matchesSquad(r.equipo, squadFilter)) return false;
+          if (!showInactive && !r.activo && Math.abs(r.saldo) <= 0.05 && r.totalPendiente === 0) return false;
+          return true;
+        });
+        filtered.sort((a, b) => a.saldo - b.saldo || a.nombre.localeCompare(b.nombre));
+
+        const kpis = {
+          cargos: filtered.reduce((s, r) => s + r.totalCargos, 0),
+          cobrado: filtered.reduce((s, r) => s + r.totalAprobado, 0),
+          porCobrar: filtered.filter(r => r.saldo < -0.05).reduce((s, r) => s + Math.abs(r.saldo), 0),
+          deudoresCount: filtered.filter(r => r.saldo < -0.05).length,
+          aFavor: filtered.filter(r => r.saldo > 0.50).reduce((s, r) => s + r.saldo, 0),
+          pendientesCount: pendingPayments.length,
+        };
+        return { rows: filtered, allRows, kpis, pendingPayments };
+      }
+
+      async function fetchData(urlToUse, keyToUse) {
+        loading = true;
+        render();
+        try {
+          const sep = urlToUse.includes("?") ? "&" : "?";
+          const res = await fetch(`${urlToUse}${sep}key=${encodeURIComponent(keyToUse)}`, { method: "GET" });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || "Error al conectar con Google Sheets.");
+          state = data;
+          apiUrl = urlToUse;
+          accessKey = keyToUse;
+          if (!FIXED_API_URL) localStorage.setItem(LS_URL, apiUrl);
+          localStorage.setItem(LS_KEY, accessKey);
+          if (data.is_admin) adminPin = keyToUse;
+          flash = null;
+        } catch (err) {
+          flash = { type: "err", msg: "No se pudo cargar: " + err.message };
+          state = null;
+        } finally {
+          loading = false;
+          render();
+        }
+      }
+
+      async function postAction(payload) {
+        loading = true;
+        render();
+        try {
+          const res = await fetch(apiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({ ...payload, key: accessKey, admin_pin: adminPin || payload.admin_pin || "" }),
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || "Error en la operación.");
+          state = data;
+          return data;
+        } catch (err) {
+          flash = { type: "err", msg: err.message };
+          return null;
+        } finally {
+          loading = false;
+          render();
+        }
+      }
+
+      function renderLogin() {
+        root.innerHTML = `
+          <div class="top-bar">
+            <a class="nav-link" href="index.html">← Volver a Estadísticas &amp; Lineup</a>
+          </div>
+          <div class="login-box">
+            <img src="logo_relampago.png" alt="Logo Relámpago del Caribe" />
+            <h1>⚡ Tesorería &amp; Ficha Oficial</h1>
+            <p>Acceso privado de <strong>Relámpago del Caribe</strong> para proteger los saldos, teléfonos y cédulas de los jugadores.</p>
+            ${flash ? `<div class="alert alert-${flash.type}">${esc(flash.msg)}</div>` : ""}
+            <form id="login-form" style="text-align:left;display:flex;flex-direction:column;gap:12px">
+              ${!FIXED_API_URL ? `
+                <div>
+                  <label class="fl">🔗 URL de Google Apps Script (/exec)</label>
+                  <input class="inp" id="in-url" type="url" required value="${esc(apiUrl)}" placeholder="https://script.google.com/macros/s/.../exec" />
+                </div>
+              ` : ""}
+              <div>
+                <label class="fl">🔑 Clave de Equipo (o PIN de Administrador)</label>
+                <input class="inp" id="in-key" type="password" required value="${esc(accessKey)}" placeholder="Ej: RELAMPAGO2026" />
+              </div>
+              <button class="btn btn-navy" type="submit" style="justify-content:center;padding:11px" ${loading ? "disabled" : ""}>
+                ${loading ? '<span class="spinner"></span> Conectando...' : "⚡ Entrar a Tesorería & Ficha"}
+              </button>
+            </form>
+          </div>
+        `;
+        document.getElementById("login-form").addEventListener("submit", (e) => {
+          e.preventDefault();
+          const u = FIXED_API_URL || document.getElementById("in-url").value.trim();
+          const k = document.getElementById("in-key").value.trim();
+          if (u && k) fetchData(u, k);
+        });
+      }
+
+      function render() {
+        if (!state) {
+          renderLogin();
+          return;
+        }
+
+        const ledger = computeLedger();
+        const k = ledger.kpis;
+        const q = searchQ.trim().toLowerCase();
+        const visibleSaldos = q ? ledger.rows.filter(r => [r.nombre, r.equipo, r.estado, r.numero].join(" ").toLowerCase().includes(q)) : ledger.rows;
+        const isActiveJ = (j) => { const e = norm(j.estado || "activo"); return e !== "inactivo" && e !== "baja"; };
+        const allJugadores = (state.jugadores || []).filter(j => matchesSquad(j.equipo, squadFilter) && (showInactive || isActiveJ(j)));
+        const visibleFicha = q ? allJugadores.filter(j => [j.nombre, j.cedula, j.numero, j.telefono, j.equipo, j.pos1].join(" ").toLowerCase().includes(q)) : allJugadores;
+        const isAdminUnlocked = Boolean(adminPin);
+
+        let tabContent = "";
+
+        // ======================= TAB 1: ESTADO DE CUENTA =======================
+        if (activeTab === "saldos") {
+          tabContent = `
+            <section class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+                <div>
+                  <h2>💰 Estado de Cuenta por Jugador</h2>
+                  <div class="sub" style="margin-bottom:0">Haz clic en cualquier jugador para ver el detalle exacto de sus cargos y abonos</div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                  <input class="inp" id="search-box" style="width:220px" value="${esc(searchQ)}" placeholder="Buscar jugador..." />
+                  <button class="btn btn-green" id="btn-wa-cobranza">📲 Copiar Cobranza WhatsApp</button>
+                </div>
+              </div>
+              <div class="tw">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Jugador</th>
+                      <th class="center">Eq.</th>
+                      <th class="center">#</th>
+                      <th class="center">Estado</th>
+                      <th class="num">Cargos</th>
+                      <th class="num">Abonos</th>
+                      <th class="num">En Revisión</th>
+                      <th class="num">Saldo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${visibleSaldos.map(r => {
+                      const bCls = r.estado === "Debe" ? "b-debe" : (r.estado === "A Favor" ? "b-favor" : "b-ok");
+                      const isExp = expandedPlayer === r.nombre;
+                      return `
+                        <tr class="click-row" data-exp="${esc(r.nombre)}">
+                          <td><strong>${esc(r.nombre)}</strong>${!r.activo ? ' <span class="badge b-pend">Baja</span>' : ''} <span style="font-size:11px;color:var(--light)">${isExp ? "▲" : "▼"}</span></td>
+                          <td class="center"><span class="badge b-gold">${esc(r.equipo)}</span></td>
+                          <td class="center" style="font-family:var(--mono)">${esc(r.numero || "—")}</td>
+                          <td class="center"><span class="badge ${bCls}">${esc(r.estado)}</span></td>
+                          <td class="num">${fmtMoney(r.totalCargos)}</td>
+                          <td class="num">${fmtMoney(r.totalAprobado)}</td>
+                          <td class="num">${r.totalPendiente > 0 ? `<span class="badge b-pend">${fmtMoney(r.totalPendiente)}</span>` : "—"}</td>
+                          <td class="num" style="font-weight:900;color:${r.saldo < -0.05 ? "var(--red)" : (r.saldo > 0.5 ? "var(--navy)" : "var(--green)")}">
+                            ${r.saldo > 0 ? "+" : ""}${fmtMoney(r.saldo)}
+                          </td>
+                        </tr>
+                        ${isExp ? `
+                          <tr>
+                            <td colspan="8" style="padding:0">
+                              <div class="detail-box">
+                                <div class="detail-grid">
+                                  <div>
+                                    <strong style="font-size:12.5px;color:var(--navy)">📌 Cargos asignados (${r.cargosList.length})</strong>
+                                    <ul style="margin:6px 0 0 16px;font-size:12px;color:var(--muted)">
+                                      ${r.cargosList.map(c => `<li>${esc(c.fecha)} · <strong>${esc(c.concepto)}</strong>: ${fmtMoney(c.monto_usd)}</li>`).join("") || "<li>Sin cargos registrados.</li>"}
+                                    </ul>
+                                  </div>
+                                  <div>
+                                    <strong style="font-size:12.5px;color:var(--navy)">✅ Pagos y reportes (${r.pagosList.length})</strong>
+                                    <ul style="margin:6px 0 0 16px;font-size:12px;color:var(--muted)">
+                                      ${r.pagosList.slice().reverse().map(p => `<li>${esc(p.fecha || p.mes)} · <strong>${fmtMoney(p.monto_usd)}</strong> (${esc(p.metodo)}${p.referencia ? " Ref: " + esc(p.referencia) : ""}) — <em>${esc(p.concepto)}</em> <span class="badge ${norm(p.estado)==="aprobado"?"b-ok":(norm(p.estado)==="pendiente"?"b-pend":"b-debe")}">${esc(p.estado)}</span></li>`).join("") || "<li>Sin pagos registrados.</li>"}
+                                    </ul>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ` : ""}
+                      `;
+                    }).join("") || `<tr><td colspan="8" class="center" style="color:var(--light)">Sin jugadores en este filtro.</td></tr>`}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          `;
+        }
+
+        // ======================= TAB 2: REPORTAR PAGO (JUGADORES) =======================
+        else if (activeTab === "reportar") {
+          const allNames = (state.jugadores || []).filter(j => {
+            if (isActiveJ(j)) return true;
+            const row = ledger.allRows.find(r => r.nombre === j.nombre);
+            return row && row.saldo < -0.05;
+          }).map(j => j.nombre).sort((a,b) => a.localeCompare(b));
+          tabContent = `
+            <section class="card" style="max-width:740px;margin:0 auto 18px">
+              <h2>🧾 Reportar un Pago</h2>
+              <div class="sub">Registra tu pago móvil, Zelle, Binance o efectivo. Quedará en revisión hasta que el tesorero lo apruebe.</div>
+              <form id="pay-form" class="form-grid">
+                <div>
+                  <label class="fl">👤 Jugador *</label>
+                  <select class="sel" id="pf-jug" required>
+                    <option value="">— Selecciona tu nombre —</option>
+                    ${allNames.map(n => {
+                      const row = ledger.allRows.find(r => r.nombre === n);
+                      const deudaTxt = row && row.saldo < -0.05 ? ` (Debe ${fmtMoney(Math.abs(row.saldo))})` : (row && row.saldo > 0.5 ? ` (A favor ${fmtMoney(row.saldo)})` : " (Solvente)");
+                      return `<option value="${esc(n)}">${esc(n)}${deudaTxt}</option>`;
+                    }).join("")}
+                  </select>
+                </div>
+                <div>
+                  <label class="fl">⚡ Equipo *</label>
+                  <select class="sel" id="pf-eq">
+                    <option value="A">Equipo A</option>
+                    <option value="B">Equipo B</option>
+                    <option value="A y B">Ambos (A y B)</option>
+                  </select>
+                </div>
+
+                <div class="calc-box full">
+                  <div style="font-size:12px;font-weight:800;color:var(--navy);margin-bottom:6px">💱 ¿Pagaste en Bolívares? (Opcional: calcula el equivalente en USD automáticamente)</div>
+                  <div class="form-grid-3">
+                    <div>
+                      <label class="fl">Monto en Bs</label>
+                      <input class="inp" id="pf-bs" type="number" step="0.01" min="0" placeholder="Ej: 1500.00" />
+                    </div>
+                    <div>
+                      <label class="fl">Tasa BCV</label>
+                      <input class="inp" id="pf-tasa" type="number" step="0.01" min="0" placeholder="Ej: 52.50" />
+                    </div>
+                    <div>
+                      <label class="fl">Monto a abonar (USD $) *</label>
+                      <input class="inp" id="pf-usd" type="number" step="0.01" min="0.01" required placeholder="Ej: 15.00" style="font-weight:900;color:var(--navy)" />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label class="fl">💳 Método de Pago *</label>
+                  <select class="sel" id="pf-met">
+                    <option value="Pago Móvil">Pago Móvil (Bs)</option>
+                    <option value="Zelle">Zelle ($)</option>
+                    <option value="Efectivo USD">Efectivo ($)</option>
+                    <option value="Binance / USDT">Binance / USDT</option>
+                    <option value="Transferencia Bs">Transferencia Bs</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="fl">🔢 N° de Referencia (últimos 6 dígitos)</label>
+                  <input class="inp" id="pf-ref" type="text" placeholder="Ej: 482910 (o 'Efectivo')" />
+                </div>
+                <div>
+                  <label class="fl">📅 Fecha del Pago</label>
+                  <input class="inp" id="pf-fecha" type="date" value="${new Date().toISOString().slice(0,10)}" />
+                </div>
+                <div>
+                  <label class="fl">🏷️ Concepto</label>
+                  <input class="inp" id="pf-conc" type="text" placeholder="Ej: Torneo Metropolitana / Pelotas / Abono" />
+                </div>
+                <div class="full">
+                  <label class="fl">📝 Observación (opcional)</label>
+                  <input class="inp" id="pf-obs" type="text" placeholder="Ej: Pagado a cuenta de Leo / Juan" />
+                </div>
+                <div class="full" style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px">
+                  <button class="btn btn-green" type="submit" style="padding:11px 20px;font-size:13.5px" ${loading ? "disabled" : ""}>
+                    ${loading ? '<span class="spinner"></span> Enviando...' : "✅ Enviar Reporte de Pago"}
+                  </button>
+                </div>
+              </form>
+            </section>
+          `;
+        }
+
+        // ======================= TAB 3: FICHA OFICIAL DE JUGADORES =======================
+        else if (activeTab === "ficha") {
+          tabContent = `
+            <section class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+                <div>
+                  <h2>🪪 Ficha Oficial de Jugadores (${visibleFicha.length})</h2>
+                  <div class="sub" style="margin-bottom:0">Roster Oficial de Relámpago del Caribe — Cédula, Nacimiento, Camiseta, Batea/Lanza y Contacto</div>
+                </div>
+                <div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                  <input class="inp" id="search-box" style="width:200px" value="${esc(searchQ)}" placeholder="Buscar nombre, CI o #..." />
+                  <label style="font-size:12px;font-weight:700;color:var(--muted);display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="chk-show-inact" ${showInactive ? "checked" : ""} /> Ver bajas</label>
+                  <button class="btn" id="btn-ficha-mode">${fichaViewMode === "cards" ? "📋 Ver como Tabla" : "🪪 Ver como Fichas"}</button>
+                  <button class="btn btn-navy" onclick="window.print()">🖨️ Imprimir Roster</button>
+                </div>
+              </div>
+
+              ${fichaViewMode === "cards" ? `
+                <div class="ficha-grid">
+                  ${visibleFicha.map(j => {
+                    const cleanTel = (j.telefono || "").replace(/[^\d]/g, "");
+                    const waTel = cleanTel.startsWith("0") ? "58" + cleanTel.slice(1) : cleanTel;
+                    return `
+                      <div class="ficha-card">
+                        <div class="fc-top">
+                          <div style="display:flex;gap:10px;align-items:center">
+                            <div class="jersey-num">${esc(j.numero || "—")}</div>
+                            <div>
+                              <div style="font-weight:900;color:var(--navy);font-size:15px">${esc(j.nombre)}</div>
+                              <div style="font-size:11.5px;color:var(--muted)">
+                                <span class="badge b-gold">Eq. ${esc(j.equipo)}</span>
+                                ${j.pos1 ? ` <span class="badge b-favor">${esc(j.pos1)}${j.pos2 ? " / " + esc(j.pos2) : ""}</span>` : ""}
+                                ${norm(j.es_pitcher)==="si" ? ' <span class="badge b-ok">Pitcher</span>' : ""}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="fc-meta">
+                          <div><strong>Cédula:</strong> ${esc(j.cedula || "Pendiente")}</div>
+                          <div><strong>Edad:</strong> ${j.edad ? esc(j.edad) + " años" : "—"}</div>
+                          <div><strong>Nac.:</strong> ${esc(j.fecha_nac || "—")}</div>
+                          <div><strong>Bat/Lan:</strong> ${esc(j.batea || "—")} / ${esc(j.lanza || "—")}</div>
+                          <div style="grid-column:1/-1"><strong>Tel:</strong> ${j.telefono ? `<a href="https://wa.me/${waTel}" target="_blank" style="color:var(--green);font-weight:700;text-decoration:none">📱 ${esc(j.telefono)}</a>` : "Pendiente"}</div>
+                        </div>
+                      </div>
+                    `;
+                  }).join("")}
+                </div>
+              ` : `
+                <div class="tw">
+                  <table>
+                    <thead>
+                      <tr><th class="center">#</th><th>Nombre y Apellido</th><th class="center">Equipo</th><th>Cédula</th><th>Fecha Nac.</th><th class="center">Edad</th><th class="center">Batea</th><th class="center">Lanza</th><th>Teléfono</th><th>Posición</th></tr>
+                    </thead>
+                    <tbody>
+                      ${visibleFicha.map(j => `
+                        <tr>
+                          <td class="center" style="font-family:var(--mono);font-weight:900">${esc(j.numero || "—")}</td>
+                          <td><strong>${esc(j.nombre)}</strong></td>
+                          <td class="center"><span class="badge b-gold">${esc(j.equipo)}</span></td>
+                          <td style="font-family:var(--mono)">${esc(j.cedula || "—")}</td>
+                          <td>${esc(j.fecha_nac || "—")}</td>
+                          <td class="center">${esc(j.edad || "—")}</td>
+                          <td class="center">${esc(j.batea || "—")}</td>
+                          <td class="center">${esc(j.lanza || "—")}</td>
+                          <td>${esc(j.telefono || "—")}</td>
+                          <td>${esc([j.pos1, j.pos2].filter(Boolean).join(" / ") || "—")}</td>
+                        </tr>
+                      `).join("")}
+                    </tbody>
+                  </table>
+                </div>
+              `}
+            </section>
+          `;
+        }
+
+        // ======================= TAB 4: PANEL ADMINISTRADOR =======================
+        else if (activeTab === "admin") {
+          if (!isAdminUnlocked) {
+            tabContent = `
+              <section class="card" style="max-width:460px;margin:20px auto;text-align:center">
+                <h2>🔐 Acceso Administrador / Tesorero</h2>
+                <div class="sub">Ingresa tu PIN de Administrador para aprobar pagos, distribuir gastos y editar fichas.</div>
+                <form id="admin-unlock-form" style="display:flex;flex-direction:column;gap:10px">
+                  <input class="inp" id="in-admin-pin" type="password" required placeholder="PIN Administrador" />
+                  <button class="btn btn-navy" type="submit" style="justify-content:center">🔓 Desbloquear Panel Admin</button>
+                </form>
+              </section>
+            `;
+          } else {
+            const allJAll = (state.jugadores || []).slice().sort((a,b) => a.nombre.localeCompare(b.nombre));
+            const allJ = allJAll.filter(isActiveJ);
+            const nSel = selectedForExpense.size;
+            const mNum = parseFloat(expenseMonto) || 0;
+            const previewPerPlayer = nSel > 0 && mNum > 0
+              ? (expenseTipo === "Dividir entre grupo" ? (mNum / nSel) : mNum)
+              : 0;
+            const previewTotal = nSel > 0 && mNum > 0
+              ? (expenseTipo === "Dividir entre grupo" ? mNum : (mNum * nSel))
+              : 0;
+
+            tabContent = `
+              <!-- 1. BANDEJA DE PAGOS PENDIENTES -->
+              <section class="card">
+                <h2>⏳ Pagos Reportados Pendientes de Revisión (${ledger.pendingPayments.length})</h2>
+                <div class="sub">Verifica el pago en tu banco y apruébalo con un clic para descontarlo del saldo del jugador.</div>
+                ${ledger.pendingPayments.length ? `
+                  <div class="tw"><table>
+                    <thead><tr><th>ID</th><th>Fecha</th><th>Jugador</th><th>Eq.</th><th class="num">Monto</th><th>Método / Ref</th><th>Concepto</th><th class="center">Acciones</th></tr></thead>
+                    <tbody>
+                      ${ledger.pendingPayments.map(p => `
+                        <tr>
+                          <td style="font-family:var(--mono);font-size:11.5px">${esc(p.id_pago)}</td>
+                          <td>${esc(p.fecha)}</td>
+                          <td><strong>${esc(p.jugador)}</strong></td>
+                          <td><span class="badge b-gold">${esc(p.equipo)}</span></td>
+                          <td class="num"><strong>${fmtMoney(p.monto_usd)}</strong>${p.monto_bs ? `<br><span style="font-size:10.5px;color:var(--light)">Bs ${fmtNum(p.monto_bs, 2)}</span>` : ""}</td>
+                          <td>${esc(p.metodo)}${p.referencia ? `<br><span style="font-family:var(--mono);font-size:11px">Ref: ${esc(p.referencia)}</span>` : ""}</td>
+                          <td>${esc(p.concepto)}${p.observacion ? `<br><span style="font-size:11px;color:var(--light)">${esc(p.observacion)}</span>` : ""}</td>
+                          <td class="center" style="white-space:nowrap">
+                            <button class="btn btn-green btn-sm" data-rev-id="${esc(p.id_pago)}" data-rev-st="Aprobado">✅ Aprobar</button>
+                            <button class="btn btn-red btn-sm" data-rev-id="${esc(p.id_pago)}" data-rev-st="Rechazado">✕</button>
+                          </td>
+                        </tr>
+                      `).join("")}
+                    </tbody>
+                  </table></div>
+                ` : `<div class="alert alert-ok" style="margin-bottom:0">✅ No tienes pagos pendientes por revisar. ¡Todo al día!</div>`}
+              </section>
+
+              <!-- 2. CARGAR Y DISTRIBUIR NUEVO GASTO -->
+              <section class="card">
+                <h2>💸 Cargar y Distribuir Nuevo Gasto</h2>
+                <div class="sub">Equivalente automatizado a tu columna de gastos en Excel: elige si el monto total se divide entre el grupo marcado o es cuota fija por persona.</div>
+                <form id="expense-form" class="form-grid">
+                  <div>
+                    <label class="fl">🏷️ Concepto del Gasto *</label>
+                    <input class="inp" id="ex-conc" required value="${esc(expenseConcept)}" placeholder="Ej: Umpire Domingo 29/11 · Pelotas T90 · Inscripción" />
+                  </div>
+                  <div>
+                    <label class="fl">⚡ Equipo</label>
+                    <select class="sel" id="ex-eq">
+                      <option value="A" ${expenseEquipo==="A"?"selected":""}>Equipo A</option>
+                      <option value="B" ${expenseEquipo==="B"?"selected":""}>Equipo B</option>
+                      <option value="A y B" ${expenseEquipo==="A y B"?"selected":""}>Ambos (A y B)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="fl">➗ Modo de Distribución</label>
+                    <select class="sel" id="ex-tipo">
+                      <option value="Dividir entre grupo" ${expenseTipo==="Dividir entre grupo"?"selected":""}>Dividir monto total entre seleccionados (ej. $150 ÷ N)</option>
+                      <option value="Fijo por jugador" ${expenseTipo==="Fijo por jugador"?"selected":""}>Monto fijo por cada seleccionado (ej. $12 c/u)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="fl">💵 ${expenseTipo === "Dividir entre grupo" ? "Monto TOTAL a dividir (USD $)" : "Monto FIJO por jugador (USD $)"} *</label>
+                    <input class="inp" id="ex-monto" type="number" step="0.01" min="0.01" required value="${esc(expenseMonto)}" placeholder="Ej: 150.00" />
+                  </div>
+                  <div>
+                    <label class="fl">📅 Fecha</label>
+                    <input class="inp" id="ex-fecha" type="date" value="${esc(expenseFecha)}" />
+                  </div>
+                  <div>
+                    <label class="fl">📝 Notas (opcional)</label>
+                    <input class="inp" id="ex-notas" value="${esc(expenseNotas)}" placeholder="Ej: 2 juegos + 3 pelotas" />
+                  </div>
+
+                  <div class="full">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+                      <label class="fl" style="margin:0">👥 Selecciona los jugadores a quienes aplica este gasto (${nSel} seleccionados):</label>
+                      <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        <button type="button" class="btn btn-sm" id="ex-sel-a">⚡ Todo Equipo A</button>
+                        <button type="button" class="btn btn-sm" id="ex-sel-b">⚡ Todo Equipo B</button>
+                        <button type="button" class="btn btn-sm" id="ex-sel-all">Todos</button>
+                        <button type="button" class="btn btn-sm" id="ex-sel-none">Limpiar</button>
+                      </div>
+                    </div>
+                    <div class="check-grid">
+                      ${allJ.map(j => {
+                        const chk = selectedForExpense.has(j.nombre);
+                        return `<label class="chk-item ${chk ? "checked" : ""}" data-ex-j="${esc(j.nombre)}"><input type="checkbox" ${chk ? "checked" : ""} /> <span>${esc(j.nombre)} <span style="opacity:.7">(${esc(j.equipo)})</span></span></label>`;
+                      }).join("")}
+                    </div>
+                  </div>
+
+                  <div class="full" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;background:var(--gold-soft);border:1px solid #eab308;padding:12px 14px;border-radius:10px">
+                    <div style="font-size:13px;color:#713f12">
+                      <strong>Vista previa:</strong> ${nSel} jugador(es) × <strong>${fmtMoney(previewPerPlayer)}</strong> c/u = Total <strong>${fmtMoney(previewTotal)}</strong>
+                    </div>
+                    <button class="btn btn-navy" type="submit" ${loading || nSel === 0 ? "disabled" : ""}>🚀 Cargar y Distribuir Gasto</button>
+                  </div>
+                </form>
+              </section>
+
+              <!-- 3. REGISTRAR PAGO DIRECTO (ADMIN) -->
+              <section class="card">
+                <h2>✅ Registrar Pago Directo (Ya Verificado)</h2>
+                <div class="sub">Para pagos en efectivo en el campo o abonos que ya recibiste sin reporte previo del jugador.</div>
+                <form id="admin-pay-form" class="form-grid-3">
+                  <div>
+                    <label class="fl">Jugador *</label>
+                    <select class="sel" id="ap-jug" required>
+                      <option value="">— Selecciona —</option>
+                      ${allJ.map(j => `<option value="${esc(j.nombre)}">${esc(j.nombre)} (${esc(j.equipo)})</option>`).join("")}
+                    </select>
+                  </div>
+                  <div>
+                    <label class="fl">Monto USD ($) *</label>
+                    <input class="inp" id="ap-usd" type="number" step="0.01" min="0.01" required placeholder="Ej: 10.00" />
+                  </div>
+                  <div>
+                    <label class="fl">Método</label>
+                    <select class="sel" id="ap-met">
+                      <option value="Efectivo USD">Efectivo ($)</option>
+                      <option value="Pago Móvil">Pago Móvil</option>
+                      <option value="Zelle">Zelle</option>
+                      <option value="Binance / USDT">Binance / USDT</option>
+                      <option value="Ajuste / Exoneración">Ajuste / Exoneración</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="fl">Concepto</label>
+                    <input class="inp" id="ap-conc" placeholder="Ej: Abono cuenta / 3 juegos" />
+                  </div>
+                  <div>
+                    <label class="fl">Referencia</label>
+                    <input class="inp" id="ap-ref" placeholder="Opcional" />
+                  </div>
+                  <div style="display:flex;align-items:flex-end">
+                    <button class="btn btn-green" type="submit" style="width:100%;justify-content:center;padding:10px">💾 Guardar Pago Aprobado</button>
+                  </div>
+                </form>
+              </section>
+
+              <!-- 4. EDITAR / AGREGAR FICHA DE JUGADOR -->
+              <section class="card">
+                <h2>🪪 Agregar o Editar Ficha de Jugador</h2>
+                <div class="sub">Selecciona un jugador existente para actualizar su Equipo (A/B), Cédula, Teléfono o # de Camiseta, o crea uno nuevo.</div>
+                <div style="margin-bottom:12px">
+                  <select class="sel" id="ed-pick-jug" style="max-width:380px">
+                    <option value="__NEW__">➕ Crear Jugador Nuevo</option>
+                    ${allJAll.map(j => `<option value="${esc(j.id)}" ${editingPlayer && editingPlayer.id === j.id ? "selected" : ""}>${esc(j.nombre)} (Eq. ${esc(j.equipo)} · #${esc(j.numero || "—")})${!isActiveJ(j) ? " [BAJA]" : ""}</option>`).join("")}
+                  </select>
+                </div>
+                <form id="player-form" class="form-grid-3">
+                  <div><label class="fl">Nombre y Apellido *</label><input class="inp" id="jp-nom" required value="${esc(editingPlayer?.nombre || "")}" /></div>
+                  <div><label class="fl">Equipo *</label><select class="sel" id="jp-eq"><option value="A" ${(editingPlayer?.equipo||"A")==="A"?"selected":""}>A</option><option value="B" ${editingPlayer?.equipo==="B"?"selected":""}>B</option><option value="A y B" ${editingPlayer?.equipo==="A y B"?"selected":""}>A y B</option></select></div>
+                  <div><label class="fl">Estado en el Equipo</label><select class="sel" id="jp-est"><option value="Activo" ${(editingPlayer?.estado||"Activo")==="Activo"?"selected":""}>Activo</option><option value="Inactivo" ${editingPlayer?.estado==="Inactivo"?"selected":""}>Inactivo (Dado de baja)</option></select></div>
+                  <div><label class="fl">Cédula</label><input class="inp" id="jp-ci" value="${esc(editingPlayer?.cedula || "")}" placeholder="Ej: 18836968" /></div>
+                  <div><label class="fl">Fecha de Nacimiento</label><input class="inp" id="jp-dob" type="date" value="${esc(editingPlayer?.fecha_nac || "")}" /></div>
+                  <div><label class="fl"># Camiseta</label><input class="inp" id="jp-num" value="${esc(editingPlayer?.numero || "")}" placeholder="Ej: 3" /></div>
+                  <div><label class="fl">Teléfono Celular</label><input class="inp" id="jp-tel" value="${esc(editingPlayer?.telefono || "")}" placeholder="0412-000-0000" /></div>
+                  <div><label class="fl">Batea / Lanza</label><div style="display:flex;gap:6px"><input class="inp" id="jp-bat" value="${esc(editingPlayer?.batea || "D")}" placeholder="D" /><input class="inp" id="jp-lan" value="${esc(editingPlayer?.lanza || "D")}" placeholder="D" /></div></div>
+                  <div><label class="fl">Posición 1 / 2</label><div style="display:flex;gap:6px"><input class="inp" id="jp-p1" value="${esc(editingPlayer?.pos1 || "")}" placeholder="2B" /><input class="inp" id="jp-p2" value="${esc(editingPlayer?.pos2 || "")}" placeholder="SS" /></div></div>
+                  <div class="full" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                      ${editingPlayer ? `
+                        <button type="button" class="btn" id="btn-baja-jug" style="border-color:#eab308;color:#854d0e;background:#fef9c3">🚫 Dar de Baja (mantener historial)</button>
+                        <button type="button" class="btn btn-red" id="btn-del-jug">🗑️ Eliminar del Roster</button>
+                      ` : ""}
+                    </div>
+                    <button class="btn btn-navy" type="submit">💾 Guardar Ficha del Jugador</button>
+                  </div>
+                </form>
+              </section>
+            `;
+          }
+        }
+
+        root.innerHTML = `
+          <div class="top-bar no-print">
+            <a class="nav-link" href="index.html">← Volver a Estadísticas &amp; Lineup</a>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-sm" id="btn-refresh">🔄 Actualizar datos</button>
+              <button class="btn btn-sm" id="btn-logout">🔒 Salir</button>
+            </div>
+          </div>
+
+          <header class="hero">
+            <div class="hero-top">
+              <div class="logo-wrap"><img src="logo_relampago.png" alt="Relámpago del Caribe" /></div>
+              <div>
+                <div class="slogan-pill">⚡ ¡CACHAM! · TESORERÍA Y ROSTER OFICIAL</div>
+                <h1>Relámpago del Caribe — Control de Pagos y Ficha</h1>
+                <div class="hero-sub">Equipos A y B en tiempo real con Google Sheets · Última sincronización: ${esc(state.updated_at)}</div>
+              </div>
+            </div>
+            <div class="kpi-grid">
+              <div class="kpi"><div class="kpi-v">${fmtMoney(k.cargos)}</div><div class="kpi-l">Total Cargos (${squadFilter === "ALL" ? "A+B" : "Eq. " + squadFilter})</div></div>
+              <div class="kpi"><div class="kpi-v green">${fmtMoney(k.cobrado)}</div><div class="kpi-l">Total Recaudado</div></div>
+              <div class="kpi"><div class="kpi-v red">${fmtMoney(k.porCobrar)}</div><div class="kpi-l">Por Cobrar (${k.deudoresCount} jug.)</div></div>
+              <div class="kpi"><div class="kpi-v gold">${fmtMoney(k.aFavor)}</div><div class="kpi-l">Saldos a Favor</div></div>
+              <div class="kpi"><div class="kpi-v">${k.pendientesCount}</div><div class="kpi-l">Pagos por Revisar</div></div>
+            </div>
+          </header>
+
+          <div class="tabs-bar no-print">
+            <div class="tabs">
+              <button class="tab-btn ${activeTab==="saldos"?"active":""}" data-tab="saldos">💰 Estado de Cuenta</button>
+              <button class="tab-btn ${activeTab==="reportar"?"active":""}" data-tab="reportar">🧾 Reportar Pago</button>
+              <button class="tab-btn ${activeTab==="ficha"?"active":""}" data-tab="ficha">🪪 Ficha Jugadores</button>
+              <button class="tab-btn ${activeTab==="admin"?"active":""}" data-tab="admin">🔐 Admin${k.pendientesCount > 0 ? `<span class="cnt">${k.pendientesCount}</span>` : ""}</button>
+            </div>
+            <div class="squad-pills">
+              <span style="font-size:11px;font-weight:800;color:var(--navy)">FILTRAR:</span>
+              <button class="sq-btn ${squadFilter==="ALL"?"active":""}" data-sq="ALL">Todos (A+B)</button>
+              <button class="sq-btn ${squadFilter==="A"?"active":""}" data-sq="A">Equipo A</button>
+              <button class="sq-btn ${squadFilter==="B"?"active":""}" data-sq="B">Equipo B</button>
+            </div>
+          </div>
+
+          ${flash ? `
+            <div class="alert alert-${flash.type}" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+              <span>${esc(flash.msg)}</span>
+              ${flash.waUrl ? `<a class="btn btn-green btn-sm" href="${flash.waUrl}" target="_blank">📲 Enviar Comprobante por WhatsApp</a>` : ""}
+            </div>
+          ` : ""}
+
+          ${tabContent}
+        `;
+
+        // Wire global listeners
+        document.getElementById("btn-refresh").addEventListener("click", () => fetchData(apiUrl, accessKey));
+        document.getElementById("btn-logout").addEventListener("click", () => {
+          localStorage.removeItem(LS_KEY);
+          accessKey = ""; adminPin = ""; state = null; flash = null; render();
+        });
+        document.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => { activeTab = b.dataset.tab; render(); }));
+        document.querySelectorAll("[data-sq]").forEach(b => b.addEventListener("click", () => { squadFilter = b.dataset.sq; render(); }));
+
+        const sb = document.getElementById("search-box");
+        if (sb) sb.addEventListener("input", (e) => { searchQ = e.target.value; render(); });
+
+        // Tab 1 listeners
+        document.querySelectorAll("[data-exp]").forEach(tr => tr.addEventListener("click", () => {
+          const nm = tr.dataset.exp;
+          expandedPlayer = (expandedPlayer === nm) ? "" : nm;
+          render();
+        }));
+        const waCob = document.getElementById("btn-wa-cobranza");
+        if (waCob) waCob.addEventListener("click", () => {
+          const deudores = ledger.rows.filter(r => r.saldo < -0.05);
+          const lines = [
+            `⚡ *RELÁMPAGO DEL CARIBE — ESTADO DE CUENTA (${squadFilter === "ALL" ? "A y B" : "Equipo " + squadFilter})*`,
+            deudores.length ? "" : "✅ ¡Todos los jugadores están solventes!",
+            ...deudores.map(d => `• *${d.nombre}:* Debe *${fmtMoney(Math.abs(d.saldo))}*`),
+            "",
+            deudores.length ? `Total por cobrar: *${fmtMoney(k.porCobrar)}*\nReporta tu pago aquí: ${window.location.href}` : "",
+          ].filter(Boolean);
+          navigator.clipboard?.writeText(lines.join("\n"));
+          waCob.textContent = "✅ ¡Copiado para WhatsApp!";
+          setTimeout(() => waCob.textContent = "📲 Copiar Cobranza WhatsApp", 1800);
+        });
+
+        // Tab 2 listeners (Reportar Pago)
+        const payForm = document.getElementById("pay-form");
+        if (payForm) {
+          const bsEl = document.getElementById("pf-bs");
+          const tasaEl = document.getElementById("pf-tasa");
+          const usdEl = document.getElementById("pf-usd");
+          const jugEl = document.getElementById("pf-jug");
+          const eqEl = document.getElementById("pf-eq");
+
+          const recalcUsd = () => {
+            const b = parseFloat(bsEl.value), t = parseFloat(tasaEl.value);
+            if (b > 0 && t > 0) usdEl.value = (b / t).toFixed(2);
+          };
+          bsEl.addEventListener("input", recalcUsd);
+          tasaEl.addEventListener("input", recalcUsd);
+          jugEl.addEventListener("change", () => {
+            const row = ledger.allRows.find(r => r.nombre === jugEl.value);
+            if (row) {
+              eqEl.value = ["A","B","A y B"].includes(row.equipo) ? row.equipo : "A";
+              if (row.saldo < -0.05 && !usdEl.value) usdEl.value = Math.abs(row.saldo).toFixed(2);
+            }
+          });
+          payForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const jug = jugEl.value;
+            const usd = parseFloat(usdEl.value);
+            const met = document.getElementById("pf-met").value;
+            const ref = document.getElementById("pf-ref").value.trim();
+            const conc = document.getElementById("pf-conc").value.trim() || "Abono cuenta";
+            const obs = document.getElementById("pf-obs").value.trim();
+            const res = await postAction({
+              action: "reportar_pago",
+              jugador: jug,
+              equipo: eqEl.value,
+              monto_usd: usd,
+              monto_bs: bsEl.value ? parseFloat(bsEl.value) : "",
+              tasa_bcv: tasaEl.value ? parseFloat(tasaEl.value) : "",
+              metodo: met,
+              referencia: ref,
+              fecha: document.getElementById("pf-fecha").value,
+              concepto: conc,
+              observacion: obs,
+            });
+            if (res) {
+              const waText = encodeURIComponent(`⚡ Reporte de Pago Relámpago (${res.id_pago})\nJugador: ${jug}\nMonto: ${fmtMoney(usd)}\nMétodo: ${met}\nRef: ${ref || "N/A"}\nConcepto: ${conc}`);
+              const waUrl = FIXED_WA ? `https://wa.me/${FIXED_WA}?text=${waText}` : `https://wa.me/?text=${waText}`;
+              flash = { type: "ok", msg: res.message, waUrl };
+              activeTab = "saldos";
+              render();
+            }
+          });
+        }
+
+        // Tab 3 listeners (Ficha)
+        const fmBtn = document.getElementById("btn-ficha-mode");
+        if (fmBtn) fmBtn.addEventListener("click", () => { fichaViewMode = fichaViewMode === "cards" ? "table" : "cards"; render(); });
+        const chkIn = document.getElementById("chk-show-inact");
+        if (chkIn) chkIn.addEventListener("change", (e) => { showInactive = e.target.checked; render(); });
+
+        // Tab 4 listeners (Admin)
+        const unlockForm = document.getElementById("admin-unlock-form");
+        if (unlockForm) {
+          unlockForm.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const pin = document.getElementById("in-admin-pin").value.trim();
+            if (pin) {
+              adminPin = pin;
+              fetchData(apiUrl, pin);
+            }
+          });
+        }
+
+        document.querySelectorAll("[data-rev-id]").forEach(b => b.addEventListener("click", async () => {
+          const res = await postAction({ action: "revisar_pago", id_pago: b.dataset.revId, estado: b.dataset.revSt });
+          if (res) { flash = { type: "ok", msg: res.message }; render(); }
+        }));
+
+        const exForm = document.getElementById("expense-form");
+        if (exForm) {
+          document.getElementById("ex-conc").addEventListener("input", e => { expenseConcept = e.target.value; });
+          document.getElementById("ex-eq").addEventListener("change", e => { expenseEquipo = e.target.value; });
+          document.getElementById("ex-tipo").addEventListener("change", e => { expenseTipo = e.target.value; render(); });
+          document.getElementById("ex-monto").addEventListener("input", e => { expenseMonto = e.target.value; render(); });
+          document.getElementById("ex-fecha").addEventListener("change", e => { expenseFecha = e.target.value; });
+          document.getElementById("ex-notas").addEventListener("input", e => { expenseNotas = e.target.value; });
+
+          document.getElementById("ex-sel-a").addEventListener("click", () => {
+            selectedForExpense = new Set((state.jugadores||[]).filter(j => isActiveJ(j) && matchesSquad(j.equipo, "A")).map(j => j.nombre));
+            render();
+          });
+          document.getElementById("ex-sel-b").addEventListener("click", () => {
+            selectedForExpense = new Set((state.jugadores||[]).filter(j => isActiveJ(j) && matchesSquad(j.equipo, "B")).map(j => j.nombre));
+            render();
+          });
+          document.getElementById("ex-sel-all").addEventListener("click", () => {
+            selectedForExpense = new Set((state.jugadores||[]).filter(isActiveJ).map(j => j.nombre));
+            render();
+          });
+          document.getElementById("ex-sel-none").addEventListener("click", () => { selectedForExpense.clear(); render(); });
+
+          document.querySelectorAll("[data-ex-j]").forEach(lbl => lbl.addEventListener("click", (e) => {
+            e.preventDefault();
+            const nm = lbl.dataset.exJ;
+            if (selectedForExpense.has(nm)) selectedForExpense.delete(nm); else selectedForExpense.add(nm);
+            render();
+          }));
+
+          exForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const res = await postAction({
+              action: "crear_gasto",
+              concepto: expenseConcept,
+              equipo: expenseEquipo,
+              tipo_reparto: expenseTipo,
+              monto: parseFloat(expenseMonto),
+              fecha: expenseFecha,
+              notas: expenseNotas,
+              jugadores: Array.from(selectedForExpense),
+            });
+            if (res) {
+              expenseConcept = ""; expenseMonto = ""; expenseNotas = ""; selectedForExpense.clear();
+              flash = { type: "ok", msg: res.message };
+              render();
+            }
+          });
+        }
+
+        const apForm = document.getElementById("admin-pay-form");
+        if (apForm) {
+          apForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const jug = document.getElementById("ap-jug").value;
+            const jObj = (state.jugadores||[]).find(x => x.nombre === jug);
+            const res = await postAction({
+              action: "registrar_pago_admin",
+              jugador: jug,
+              equipo: jObj ? jObj.equipo : "A",
+              monto_usd: parseFloat(document.getElementById("ap-usd").value),
+              metodo: document.getElementById("ap-met").value,
+              concepto: document.getElementById("ap-conc").value.trim() || "Abono directo",
+              referencia: document.getElementById("ap-ref").value.trim(),
+            });
+            if (res) { flash = { type: "ok", msg: res.message }; render(); }
+          });
+        }
+
+        const pickJug = document.getElementById("ed-pick-jug");
+        if (pickJug) {
+          pickJug.addEventListener("change", () => {
+            editingPlayer = pickJug.value === "__NEW__" ? null : (state.jugadores||[]).find(j => j.id === pickJug.value) || null;
+            render();
+          });
+        }
+        const pForm = document.getElementById("player-form");
+        if (pForm) {
+          pForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const res = await postAction({
+              action: "guardar_jugador",
+              id: editingPlayer ? editingPlayer.id : "",
+              nombre: document.getElementById("jp-nom").value.trim(),
+              equipo: document.getElementById("jp-eq").value,
+              cedula: document.getElementById("jp-ci").value.trim(),
+              fecha_nac: document.getElementById("jp-dob").value,
+              numero: document.getElementById("jp-num").value.trim(),
+              telefono: document.getElementById("jp-tel").value.trim(),
+              batea: document.getElementById("jp-bat").value.trim(),
+              lanza: document.getElementById("jp-lan").value.trim(),
+              pos1: document.getElementById("jp-p1").value.trim(),
+              pos2: document.getElementById("jp-p2").value.trim(),
+              es_pitcher: editingPlayer ? editingPlayer.es_pitcher : "NO",
+              estado: document.getElementById("jp-est").value,
+            });
+            if (res) { editingPlayer = null; flash = { type: "ok", msg: res.message }; render(); }
+          });
+        }
+        const btnBaja = document.getElementById("btn-baja-jug");
+        if (btnBaja && editingPlayer) {
+          btnBaja.addEventListener("click", async () => {
+            if (!confirm(`¿Dar de baja a ${editingPlayer.nombre}? Dejará de aparecer en fichas activas y nuevos gastos, pero conservará su historial de pagos.`)) return;
+            const res = await postAction({ action: "eliminar_jugador", id: editingPlayer.id, nombre: editingPlayer.nombre, modo: "baja" });
+            if (res) { editingPlayer = null; flash = { type: "ok", msg: res.message }; render(); }
+          });
+        }
+        const btnDel = document.getElementById("btn-del-jug");
+        if (btnDel && editingPlayer) {
+          btnDel.addEventListener("click", async () => {
+            if (!confirm(`¿ELIMINAR definitivamente a ${editingPlayer.nombre} de la hoja Jugadores?`)) return;
+            const res = await postAction({ action: "eliminar_jugador", id: editingPlayer.id, nombre: editingPlayer.nombre, modo: "eliminar" });
+            if (res) { editingPlayer = null; flash = { type: "ok", msg: res.message }; render(); }
+          });
+        }
+      }
+
+      // Auto-conectar si ya guardó URL y clave
+      if (apiUrl && accessKey) {
+        fetchData(apiUrl, accessKey);
+      } else {
+        render();
+      }
+    })();
+  </script>
+</body>
+</html>
